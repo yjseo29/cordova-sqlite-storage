@@ -873,6 +873,42 @@ where the `iosDatabaseLocation` option may be set to one of the following choice
 - `default`: `Library/LocalDatabase` subdirectory - *NOT* visible to iTunes and *NOT* backed up by iCloud
 - `Library`: `Library` subdirectory - backed up by iCloud, *NOT* visible to iTunes
 - `Documents`: `Documents` subdirectory - visible to iTunes and backed up by iCloud
+- `AppGroup`: the shared App Group container on iOS, using the group identifier from `iosDatabaseLocationAppGroup`
+
+To store a database in an iOS App Group container:
+
+```js
+var db = window.sqlitePlugin.openDatabase({
+  name: 'my.db',
+  iosDatabaseLocation: 'AppGroup',
+  iosDatabaseLocationAppGroup: 'group.com.example.myapp'
+}, successcb, errorcb);
+```
+
+The `iosDatabaseLocationAppGroup` value must match an App Group identifier enabled in the iOS app entitlements. If iOS cannot resolve the App Group container, opening or deleting the database will fail.
+
+To migrate an existing iOS database file before opening it, use `copyDatabase()`:
+
+```js
+await window.sqlitePlugin.copyDatabase({
+  name: 'my.db',
+  from: 'Documents',
+  to: 'AppGroup',
+  toAppGroup: 'group.com.example.myapp',
+  deleteOriginal: false,
+  overwrite: false
+});
+
+var db = window.sqlitePlugin.openDatabase({
+  name: 'my.db',
+  iosDatabaseLocation: 'AppGroup',
+  iosDatabaseLocationAppGroup: 'group.com.example.myapp'
+}, successcb, errorcb);
+```
+
+The `deleteOriginal` and `overwrite` options default to `false`. When `overwrite` is `false` and the destination database already exists, `copyDatabase()` succeeds without copying or deleting anything, which makes startup migrations safe to run more than once. When `overwrite` is `true`, the destination database file and SQLite sidecar files (`-journal`, `-wal`, and `-shm`) are replaced. When `deleteOriginal` is `true`, the source files are removed only after a copy or overwrite succeeds.
+
+On non-iOS platforms, `copyDatabase()` is a no-op that succeeds, so the same startup migration code may be called on Android without checking `cordova.platformId`.
 
 **WARNING:** Again, the new "default" iosDatabaseLocation value is *NOT* the same as the old default location and would break an upgrade for an app using the old default value (0) on iOS.
 

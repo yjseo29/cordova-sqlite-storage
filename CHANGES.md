@@ -2,6 +2,9 @@
 
 #### cordova-sqlite-storage 7.0.1-dev
 
+- Add iOS App Group database location support using `iosDatabaseLocation: 'AppGroup'` and `iosDatabaseLocationAppGroup`.
+- Add iOS database file copy/migration support with `sqlitePlugin.copyDatabase()`.
+
 #### cordova-sqlite-storage 7.0.0
 
 - minimum Android API -> 24 (Android 7.0), with 16 KB page alignment update, from cordova-sqlite-storage-dependencies@5.0.0

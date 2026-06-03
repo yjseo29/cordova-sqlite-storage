@@ -855,6 +855,57 @@ var mytests = function() {
           }
         }, MYTIMEOUT);
 
+        it(suiteName + "open with iosDatabaseLocation: 'AppGroup' but no iosDatabaseLocationAppGroup (REJECTED with exception)", function(done) {
+          try {
+            window.sqlitePlugin.openDatabase({
+              name: 'open-iosDatabaseLocation-AppGroup-no-id.db',
+              iosDatabaseLocation: 'AppGroup'
+            }, function(db) {
+              // NOT EXPECTED:
+              expect(false).toBe(true);
+
+              // Close (plugin) & finish:
+              db.close(done, done);
+            }, function(error) {
+              // OK but NOT EXPECTED:
+              expect('Behavior changed, please update this test').toBe('--');
+
+              done();
+            });
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(e).toBeDefined();
+
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + "open with iosDatabaseLocation: 'AppGroup' but non-string iosDatabaseLocationAppGroup (REJECTED with exception)", function(done) {
+          try {
+            window.sqlitePlugin.openDatabase({
+              name: 'open-iosDatabaseLocation-AppGroup-bad-id.db',
+              iosDatabaseLocation: 'AppGroup',
+              iosDatabaseLocationAppGroup: 1
+            }, function(db) {
+              // NOT EXPECTED:
+              expect(false).toBe(true);
+
+              // Close (plugin) & finish:
+              db.close(done, done);
+            }, function(error) {
+              // OK but NOT EXPECTED:
+              expect('Behavior changed, please update this test').toBe('--');
+
+              done();
+            });
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(e).toBeDefined();
+
+            done();
+          }
+        }, MYTIMEOUT);
+
         it(suiteName + 'open with location: null (REJECTED with exception)', function(done) {
           try {
             window.sqlitePlugin.openDatabase({ name: 'open-with-location-null.db', location: null }, function(db) {
@@ -1189,6 +1240,114 @@ var mytests = function() {
           } catch (e) {
             // EXPECTED RESULT - stopped by the implementation:
             expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + "sqlitePlugin.deleteDatabase with iosDatabaseLocation: 'AppGroup' but no iosDatabaseLocationAppGroup (REJECTED with exception)", function(done) {
+          try {
+            window.sqlitePlugin.deleteDatabase({ name: 'my.db', iosDatabaseLocation: 'AppGroup' }, function() {
+              // NOT EXPECTED:
+              expect(false).toBe(true);
+
+              // Close (plugin) & finish:
+              db.close(done, done);
+            }, function(error) {
+              expect('Behavior changed, please update this test').toBe('--');
+
+              done();
+            });
+          } catch (e) {
+            // EXPECTED RESULT - stopped by the implementation:
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + "sqlitePlugin.deleteDatabase with iosDatabaseLocation: 'AppGroup' but non-string iosDatabaseLocationAppGroup (REJECTED with exception)", function(done) {
+          try {
+            window.sqlitePlugin.deleteDatabase({ name: 'my.db', iosDatabaseLocation: 'AppGroup', iosDatabaseLocationAppGroup: 1 }, function() {
+              // NOT EXPECTED:
+              expect(false).toBe(true);
+
+              // Close (plugin) & finish:
+              db.close(done, done);
+            }, function(error) {
+              expect('Behavior changed, please update this test').toBe('--');
+
+              done();
+            });
+          } catch (e) {
+            // EXPECTED RESULT - stopped by the implementation:
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.copyDatabase with no name setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('copyDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.copyDatabase({ from: 'Documents', to: 'Library' });
+
+            // NOT EXPECTED - window.sqlitePlugin.copyDatabase did not throw
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(true).toBe(true);
+
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.copyDatabase with no from setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('copyDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.copyDatabase({ name: 'my.db', to: 'Library' });
+
+            // NOT EXPECTED - window.sqlitePlugin.copyDatabase did not throw
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(true).toBe(true);
+
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.copyDatabase with no to setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('copyDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.copyDatabase({ name: 'my.db', from: 'Documents' });
+
+            // NOT EXPECTED - window.sqlitePlugin.copyDatabase did not throw
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(true).toBe(true);
+
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + "sqlitePlugin.copyDatabase to iosDatabaseLocation: 'AppGroup' but no toAppGroup (REJECTED with exception)", function(done) {
+          if (cordova.platformId !== 'ios') pending('copyDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.copyDatabase({ name: 'my.db', from: 'Documents', to: 'AppGroup' });
+
+            // NOT EXPECTED - window.sqlitePlugin.copyDatabase did not throw
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            // EXPECTED RESULT: stopped by the implementation
+            expect(e).toBeDefined();
+
             done();
           }
         }, MYTIMEOUT);

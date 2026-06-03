@@ -1,5 +1,5 @@
 (function() {
-  var DB_STATE_INIT, DB_STATE_OPEN, READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, SelfTest, argsArray, dblocations, iosLocationMap, newSQLError, nextTick, root, txLocks;
+  var DB_STATE_INIT, DB_STATE_OPEN, READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, SelfTest, argsArray, dblocations, iosLocationMap, newSQLError, nextTick, resolveIOSDatabaseLocation, root, txLocks, validateAppGroupLocation;
 
   root = this;
 
@@ -545,7 +545,29 @@
   iosLocationMap = {
     'default': 'nosync',
     'Documents': 'docs',
-    'Library': 'libs'
+    'Library': 'libs',
+    'AppGroup': 'appgroup'
+  };
+
+  resolveIOSDatabaseLocation = function(options, callName) {
+    var dblocation;
+    if (!options.iosDatabaseLocation && !options.location && options.location !== 0) {
+      throw newSQLError('Database location or iosDatabaseLocation setting is now mandatory in ' + callName + ' call.');
+    }
+    if (!!options.location && !!options.iosDatabaseLocation) {
+      throw newSQLError('AMBIGUOUS: both location and iosDatabaseLocation settings are present in ' + callName + ' call. Please use either setting, not both.');
+    }
+    dblocation = !!options.location && options.location === 'default' ? iosLocationMap['default'] : !!options.iosDatabaseLocation ? iosLocationMap[options.iosDatabaseLocation] : dblocations[options.location];
+    if (!dblocation) {
+      throw newSQLError('Valid iOS database location could not be determined in ' + callName + ' call');
+    }
+    return dblocation;
+  };
+
+  validateAppGroupLocation = function(dblocation, appGroup, callName, optionName) {
+    if (dblocation === 'appgroup' && typeof appGroup !== 'string') {
+      throw newSQLError('Valid ' + optionName + ' string setting is required when using iosDatabaseLocation: "AppGroup" in ' + callName + ' call');
+    }
   };
 
   SQLiteFactory = {
@@ -568,16 +590,8 @@
       if (!openargs.name) {
         throw newSQLError('Database name value is missing in openDatabase call');
       }
-      if (!openargs.iosDatabaseLocation && !openargs.location && openargs.location !== 0) {
-        throw newSQLError('Database location or iosDatabaseLocation setting is now mandatory in openDatabase call.');
-      }
-      if (!!openargs.location && !!openargs.iosDatabaseLocation) {
-        throw newSQLError('AMBIGUOUS: both location and iosDatabaseLocation settings are present in openDatabase call. Please use either setting, not both.');
-      }
-      dblocation = !!openargs.location && openargs.location === 'default' ? iosLocationMap['default'] : !!openargs.iosDatabaseLocation ? iosLocationMap[openargs.iosDatabaseLocation] : dblocations[openargs.location];
-      if (!dblocation) {
-        throw newSQLError('Valid iOS database location could not be determined in openDatabase call');
-      }
+      dblocation = resolveIOSDatabaseLocation(openargs, 'openDatabase');
+      validateAppGroupLocation(dblocation, openargs.iosDatabaseLocationAppGroup, 'openDatabase', 'iosDatabaseLocationAppGroup');
       openargs.dblocation = dblocation;
       if (!!openargs.createFromLocation && openargs.createFromLocation === 1) {
         openargs.createFromResource = "1";
@@ -622,19 +636,62 @@
         }
         args.path = dbname;
       }
-      if (!first.iosDatabaseLocation && !first.location && first.location !== 0) {
-        throw newSQLError('Database location or iosDatabaseLocation setting is now mandatory in deleteDatabase call.');
-      }
-      if (!!first.location && !!first.iosDatabaseLocation) {
-        throw newSQLError('AMBIGUOUS: both location and iosDatabaseLocation settings are present in deleteDatabase call. Please use either setting value, not both.');
-      }
-      dblocation = !!first.location && first.location === 'default' ? iosLocationMap['default'] : !!first.iosDatabaseLocation ? iosLocationMap[first.iosDatabaseLocation] : dblocations[first.location];
-      if (!dblocation) {
-        throw newSQLError('Valid iOS database location could not be determined in deleteDatabase call');
-      }
+      dblocation = resolveIOSDatabaseLocation(first, 'deleteDatabase');
+      validateAppGroupLocation(dblocation, first.iosDatabaseLocationAppGroup, 'deleteDatabase', 'iosDatabaseLocationAppGroup');
       args.dblocation = dblocation;
+      args.iosDatabaseLocationAppGroup = first.iosDatabaseLocationAppGroup;
       delete SQLitePlugin.prototype.openDBs[args.path];
       return cordova.exec(success, error, "SQLitePlugin", "delete", [args]);
+    },
+    copyDatabase: function(first, success, error) {
+      var args, promise, reject, resolve;
+      if (cordova.platformId !== 'ios') {
+        if (typeof success === 'function') {
+          return nextTick(function() {
+            return success('Database copy skipped on this platform');
+          });
+        }
+        return Promise.resolve('Database copy skipped on this platform');
+      }
+      if (!first || first.constructor !== Object) {
+        throw newSQLError('Sorry first copyDatabase argument must be an object');
+      }
+      if (!first.name) {
+        throw newSQLError('Database name value is missing in copyDatabase call');
+      }
+      if (typeof first.name !== 'string') {
+        throw newSQLError('copy database name must be a string');
+      }
+      if (!first.from) {
+        throw newSQLError('Source database location is missing in copyDatabase call');
+      }
+      if (!first.to) {
+        throw newSQLError('Destination database location is missing in copyDatabase call');
+      }
+      args = {
+        path: first.name,
+        fromDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.from
+        }, 'copyDatabase'),
+        toDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.to
+        }, 'copyDatabase'),
+        fromAppGroup: first.fromAppGroup || first.iosDatabaseLocationAppGroup,
+        toAppGroup: first.toAppGroup || first.iosDatabaseLocationAppGroup,
+        deleteOriginal: first.deleteOriginal === true,
+        overwrite: first.overwrite === true
+      };
+      validateAppGroupLocation(args.fromDblocation, args.fromAppGroup, 'copyDatabase', 'fromAppGroup');
+      validateAppGroupLocation(args.toDblocation, args.toAppGroup, 'copyDatabase', 'toAppGroup');
+      if (typeof success === 'function' || typeof error === 'function') {
+        return cordova.exec(success, error, "SQLitePlugin", "copyDatabase", [args]);
+      }
+      promise = new Promise(function(ok, fail) {
+        resolve = ok;
+        reject = fail;
+      });
+      cordova.exec(resolve, reject, "SQLitePlugin", "copyDatabase", [args]);
+      return promise;
     }
   };
 
@@ -910,7 +967,8 @@
     },
     selfTest: SelfTest.start,
     openDatabase: SQLiteFactory.openDatabase,
-    deleteDatabase: SQLiteFactory.deleteDatabase
+    deleteDatabase: SQLiteFactory.deleteDatabase,
+    copyDatabase: SQLiteFactory.copyDatabase
   };
 
 }).call(this);

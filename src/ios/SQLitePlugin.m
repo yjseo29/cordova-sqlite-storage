@@ -97,12 +97,31 @@
     }
 }
 
--(id) getDBPath:(NSString *)dbFile at:(NSString *)atkey {
+-(id) getDBPath:(NSString *)dbFile at:(NSString *)atkey appGroup:(NSString *)appGroup {
     if (dbFile == NULL) {
         return NULL;
     }
+    if (atkey == NULL) {
+        return NULL;
+    }
 
-    NSString *dbdir = [appDBPaths objectForKey:atkey];
+    NSString *dbdir = NULL;
+
+    if ([atkey isEqualToString:@"appgroup"]) {
+        if (appGroup == NULL) {
+            return NULL;
+        }
+
+        NSURL *groupURL = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:appGroup];
+        if (groupURL == NULL) {
+            return NULL;
+        }
+
+        dbdir = [groupURL path];
+    } else {
+        dbdir = [appDBPaths objectForKey:atkey];
+    }
+
     if (dbdir == NULL) {
         // INTERNAL PLUGIN ERROR:
         return NULL;
@@ -143,7 +162,8 @@
     if (dblocation == NULL) dblocation = @"docs";
     // DLog(@"using db location: %@", dblocation);
 
-    NSString *dbname = [self getDBPath:dbfilename at:dblocation];
+    NSString *appGroup = [options objectForKey:@"iosDatabaseLocationAppGroup"];
+    NSString *dbname = [self getDBPath:dbfilename at:dblocation appGroup:appGroup];
 
     if (!sqlite3_threadsafe()) {
         // INTERNAL PLUGIN ERROR:
@@ -266,7 +286,8 @@
         DLog(@"No db name specified for delete");
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: You must specify database path"];
     } else {
-        NSString *dbPath = [self getDBPath:dbFileName at:dblocation];
+        NSString *appGroup = [options objectForKey:@"iosDatabaseLocationAppGroup"];
+        NSString *dbPath = [self getDBPath:dbFileName at:dblocation appGroup:appGroup];
 
         if (dbPath == NULL) {
             // INTERNAL PLUGIN ERROR - NOT EXPECTED:
@@ -286,6 +307,122 @@
             pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The database does not exist on that path"];
         }
     }
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+-(void) copyDatabase: (CDVInvokedUrlCommand*)command
+{
+    [self.commandDelegate runInBackground:^{
+        [self copyDatabaseNow: command];
+    }];
+}
+
+-(void)copyDatabaseNow: (CDVInvokedUrlCommand*)command
+{
+    CDVPluginResult* pluginResult = nil;
+    NSMutableDictionary *options = [command.arguments objectAtIndex:0];
+
+    NSString *dbFileName = [options objectForKey:@"path"];
+    NSString *fromLocation = [options objectForKey:@"fromDblocation"];
+    NSString *toLocation = [options objectForKey:@"toDblocation"];
+    NSString *fromAppGroup = [options objectForKey:@"fromAppGroup"];
+    NSString *toAppGroup = [options objectForKey:@"toAppGroup"];
+    BOOL deleteOriginal = [[options objectForKey:@"deleteOriginal"] boolValue];
+    BOOL overwrite = [[options objectForKey:@"overwrite"] boolValue];
+
+    if (dbFileName == NULL) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: You must specify database path"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+
+    NSString *fromPath = [self getDBPath:dbFileName at:fromLocation appGroup:fromAppGroup];
+    NSString *toPath = [self getDBPath:dbFileName at:toLocation appGroup:toAppGroup];
+
+    if (fromPath == NULL || toPath == NULL) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: copy with no valid database path found"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    if (![fileManager fileExistsAtPath:fromPath]) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The source database does not exist on that path"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+
+    if ([fromPath isEqualToString:toPath]) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Source and destination database paths are the same"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+
+    BOOL destinationExists = [fileManager fileExistsAtPath:toPath];
+    NSError *err = nil;
+    NSArray *suffixes = @[@"", @"-journal", @"-wal", @"-shm"];
+
+    if (destinationExists && !overwrite) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:@"Destination database already exists"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+
+    if (destinationExists && overwrite) {
+        for (NSString *suffix in suffixes) {
+            NSString *destinationItemPath = [toPath stringByAppendingString:suffix];
+
+            if (![fileManager fileExistsAtPath:destinationItemPath]) {
+                continue;
+            }
+
+            if (![fileManager removeItemAtPath:destinationItemPath error:&err]) {
+                NSString *message = [NSString stringWithFormat:@"Unable to overwrite destination database file: %@", err];
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:message];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                return;
+            }
+        }
+    }
+
+    for (NSString *suffix in suffixes) {
+        NSString *sourceItemPath = [fromPath stringByAppendingString:suffix];
+        NSString *destinationItemPath = [toPath stringByAppendingString:suffix];
+
+        if (![fileManager fileExistsAtPath:sourceItemPath]) {
+            continue;
+        }
+
+        if (![fileManager copyItemAtPath:sourceItemPath toPath:destinationItemPath error:&err]) {
+            NSString *message = [NSString stringWithFormat:@"Unable to copy database file: %@", err];
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:message];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+            return;
+        }
+    }
+
+    if (deleteOriginal) {
+        for (NSString *suffix in suffixes) {
+            NSString *sourceItemPath = [fromPath stringByAppendingString:suffix];
+
+            if (![fileManager fileExistsAtPath:sourceItemPath]) {
+                continue;
+            }
+
+            if (![fileManager removeItemAtPath:sourceItemPath error:&err]) {
+                NSString *message = [NSString stringWithFormat:@"Database copied but unable to delete original database file: %@", err];
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:message];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                return;
+            }
+        }
+
+        [openDBs removeObjectForKey:dbFileName];
+    }
+
+    NSString *resultMessage = destinationExists ? @"Database overwritten" : @"Database copied";
+    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:resultMessage];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 

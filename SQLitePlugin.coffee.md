@@ -605,6 +605,32 @@
       'default' : 'nosync'
       'Documents' : 'docs'
       'Library' : 'libs'
+      'AppGroup' : 'appgroup'
+
+    resolveIOSDatabaseLocation = (options, callName) ->
+      if !options.iosDatabaseLocation and !options.location and options.location isnt 0
+        throw newSQLError "Database location or iosDatabaseLocation setting is now mandatory in #{callName} call."
+
+      if !!options.location and !!options.iosDatabaseLocation
+        throw newSQLError "AMBIGUOUS: both location and iosDatabaseLocation settings are present in #{callName} call. Please use either setting, not both."
+
+      dblocation =
+        if !!options.location and options.location is 'default'
+          iosLocationMap['default']
+        else if !!options.iosDatabaseLocation
+          iosLocationMap[options.iosDatabaseLocation]
+        else
+          dblocations[options.location]
+
+      if !dblocation
+        throw newSQLError "Valid iOS database location could not be determined in #{callName} call"
+
+      dblocation
+
+    validateAppGroupLocation = (dblocation, appGroup, callName, optionName) ->
+      if dblocation is 'appgroup' and typeof appGroup isnt 'string'
+        throw newSQLError "Valid #{optionName} string setting is required when using iosDatabaseLocation: \"AppGroup\" in #{callName} call"
+      return
 
     SQLiteFactory =
       ###
@@ -645,22 +671,8 @@
         if !openargs.name
           throw newSQLError 'Database name value is missing in openDatabase call'
 
-        if !openargs.iosDatabaseLocation and !openargs.location and openargs.location isnt 0
-          throw newSQLError 'Database location or iosDatabaseLocation setting is now mandatory in openDatabase call.'
-
-        if !!openargs.location and !!openargs.iosDatabaseLocation
-          throw newSQLError 'AMBIGUOUS: both location and iosDatabaseLocation settings are present in openDatabase call. Please use either setting, not both.'
-
-        dblocation =
-          if !!openargs.location and openargs.location is 'default'
-            iosLocationMap['default']
-          else if !!openargs.iosDatabaseLocation
-            iosLocationMap[openargs.iosDatabaseLocation]
-          else
-            dblocations[openargs.location]
-
-        if !dblocation
-          throw newSQLError 'Valid iOS database location could not be determined in openDatabase call'
+        dblocation = resolveIOSDatabaseLocation openargs, 'openDatabase'
+        validateAppGroupLocation dblocation, openargs.iosDatabaseLocationAppGroup, 'openDatabase', 'iosDatabaseLocationAppGroup'
 
         openargs.dblocation = dblocation
 
@@ -720,24 +732,11 @@
           #dblocation = if !!first.location then dblocations[first.location] else null
           #args.dblocation = dblocation || dblocations[0]
 
-        if !first.iosDatabaseLocation and !first.location and first.location isnt 0
-          throw newSQLError 'Database location or iosDatabaseLocation setting is now mandatory in deleteDatabase call.'
-
-        if !!first.location and !!first.iosDatabaseLocation
-          throw newSQLError 'AMBIGUOUS: both location and iosDatabaseLocation settings are present in deleteDatabase call. Please use either setting value, not both.'
-
-        dblocation =
-          if !!first.location and first.location is 'default'
-            iosLocationMap['default']
-          else if !!first.iosDatabaseLocation
-            iosLocationMap[first.iosDatabaseLocation]
-          else
-            dblocations[first.location]
-
-        if !dblocation
-          throw newSQLError 'Valid iOS database location could not be determined in deleteDatabase call'
+        dblocation = resolveIOSDatabaseLocation first, 'deleteDatabase'
+        validateAppGroupLocation dblocation, first.iosDatabaseLocationAppGroup, 'deleteDatabase', 'iosDatabaseLocationAppGroup'
 
         args.dblocation = dblocation
+        args.iosDatabaseLocationAppGroup = first.iosDatabaseLocationAppGroup
 
         # XXX TODO BUG litehelpers/Cordova-sqlite-storage#367 (repeated here):
         # abort all pending transactions (with error callback)
@@ -745,6 +744,51 @@
         # (and cleanup any other internal resources)
         delete SQLitePlugin::openDBs[args.path]
         cordova.exec success, error, "SQLitePlugin", "delete", [ args ]
+
+      copyDatabase: (first, success, error) ->
+        if cordova.platformId isnt 'ios'
+          if typeof success is 'function'
+            return nextTick -> success 'Database copy skipped on this platform'
+
+          return Promise.resolve 'Database copy skipped on this platform'
+
+        if !first || first.constructor isnt Object
+          throw newSQLError 'Sorry first copyDatabase argument must be an object'
+
+        if !first.name
+          throw newSQLError 'Database name value is missing in copyDatabase call'
+
+        if typeof first.name isnt 'string'
+          throw newSQLError 'copy database name must be a string'
+
+        if !first.from
+          throw newSQLError 'Source database location is missing in copyDatabase call'
+
+        if !first.to
+          throw newSQLError 'Destination database location is missing in copyDatabase call'
+
+        args =
+          path: first.name
+          fromDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.from}, 'copyDatabase'
+          toDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.to}, 'copyDatabase'
+          fromAppGroup: first.fromAppGroup or first.iosDatabaseLocationAppGroup
+          toAppGroup: first.toAppGroup or first.iosDatabaseLocationAppGroup
+          deleteOriginal: first.deleteOriginal is true
+          overwrite: first.overwrite is true
+
+        validateAppGroupLocation args.fromDblocation, args.fromAppGroup, 'copyDatabase', 'fromAppGroup'
+        validateAppGroupLocation args.toDblocation, args.toAppGroup, 'copyDatabase', 'toAppGroup'
+
+        if typeof success is 'function' or typeof error is 'function'
+          return cordova.exec success, error, "SQLitePlugin", "copyDatabase", [ args ]
+
+        promise = new Promise (ok, fail) ->
+          resolve = ok
+          reject = fail
+          return
+
+        cordova.exec resolve, reject, "SQLitePlugin", "copyDatabase", [ args ]
+        promise
 
 ## Self test:
 
@@ -1027,6 +1071,7 @@
 
       openDatabase: SQLiteFactory.openDatabase
       deleteDatabase: SQLiteFactory.deleteDatabase
+      copyDatabase: SQLiteFactory.copyDatabase
 
 ## vim directives
 
