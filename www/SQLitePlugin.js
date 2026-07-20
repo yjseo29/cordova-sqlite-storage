@@ -789,7 +789,7 @@
     },
     backupDatabase: function(first, success, error) {
       var args, result;
-      if (cordova.platformId !== 'ios') {
+      if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') {
         result = {
           action: 'skipped',
           platform: cordova.platformId
@@ -807,31 +807,35 @@
       if (!first.name || typeof first.name !== 'string') {
         throw newSQLError('Valid source database name string is required in backupDatabase call');
       }
-      if (!first.sourceLocation) {
-        throw newSQLError('sourceLocation is required in backupDatabase call');
-      }
       if (!first.backupName || typeof first.backupName !== 'string') {
         throw newSQLError('Valid backupName string is required in backupDatabase call');
       }
-      if (!first.backupLocation) {
-        throw newSQLError('backupLocation is required in backupDatabase call');
-      }
       args = {
         sourceName: first.name,
-        sourceDblocation: resolveIOSDatabaseLocation({
-          iosDatabaseLocation: first.sourceLocation
-        }, 'backupDatabase'),
-        sourceAppGroup: first.sourceAppGroup || first.iosDatabaseLocationAppGroup,
-        backupName: first.backupName,
-        backupDblocation: resolveIOSDatabaseLocation({
-          iosDatabaseLocation: first.backupLocation
-        }, 'backupDatabase'),
-        backupAppGroup: first.backupAppGroup
+        backupName: first.backupName
       };
-      validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup');
-      validateAppGroupLocation(args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup');
-      if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup)) {
-        throw newSQLError('Source and backup database paths must be different in backupDatabase call');
+      if (cordova.platformId === 'ios') {
+        if (!first.sourceLocation) {
+          throw newSQLError('sourceLocation is required in backupDatabase call on iOS');
+        }
+        if (!first.backupLocation) {
+          throw newSQLError('backupLocation is required in backupDatabase call on iOS');
+        }
+        args.sourceDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.sourceLocation
+        }, 'backupDatabase');
+        args.sourceAppGroup = first.sourceAppGroup || first.iosDatabaseLocationAppGroup;
+        args.backupDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.backupLocation
+        }, 'backupDatabase');
+        args.backupAppGroup = first.backupAppGroup;
+        validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup');
+        validateAppGroupLocation(args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup');
+        if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup)) {
+          throw newSQLError('Source and backup database paths must be different in backupDatabase call');
+        }
+      } else if (args.sourceName === args.backupName) {
+        throw newSQLError('Source and backup database names must be different in backupDatabase call on Android');
       }
       if (typeof success === 'function' || typeof error === 'function') {
         return cordova.exec(success, error, "SQLitePlugin", "backupDatabase", [args]);
@@ -842,7 +846,7 @@
     },
     restoreDatabase: function(first, success, error) {
       var args, result;
-      if (cordova.platformId !== 'ios') {
+      if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') {
         result = {
           action: 'skipped',
           platform: cordova.platformId
@@ -860,32 +864,36 @@
       if (!first.sourceName || typeof first.sourceName !== 'string') {
         throw newSQLError('Valid sourceName string is required in restoreDatabase call');
       }
-      if (!first.sourceLocation) {
-        throw newSQLError('sourceLocation is required in restoreDatabase call');
-      }
       if (!first.name || typeof first.name !== 'string') {
         throw newSQLError('Valid destination database name string is required in restoreDatabase call');
       }
-      if (!first.destinationLocation) {
-        throw newSQLError('destinationLocation is required in restoreDatabase call');
-      }
       args = {
         sourceName: first.sourceName,
-        sourceDblocation: resolveIOSDatabaseLocation({
-          iosDatabaseLocation: first.sourceLocation
-        }, 'restoreDatabase'),
-        sourceAppGroup: first.sourceAppGroup,
         destinationName: first.name,
-        destinationDblocation: resolveIOSDatabaseLocation({
-          iosDatabaseLocation: first.destinationLocation
-        }, 'restoreDatabase'),
-        destinationAppGroup: first.destinationAppGroup || first.iosDatabaseLocationAppGroup,
         deleteSource: first.deleteSource === true
       };
-      validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup');
-      validateAppGroupLocation(args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup');
-      if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup)) {
-        throw newSQLError('Source and destination database paths must be different in restoreDatabase call');
+      if (cordova.platformId === 'ios') {
+        if (!first.sourceLocation) {
+          throw newSQLError('sourceLocation is required in restoreDatabase call on iOS');
+        }
+        if (!first.destinationLocation) {
+          throw newSQLError('destinationLocation is required in restoreDatabase call on iOS');
+        }
+        args.sourceDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.sourceLocation
+        }, 'restoreDatabase');
+        args.sourceAppGroup = first.sourceAppGroup;
+        args.destinationDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.destinationLocation
+        }, 'restoreDatabase');
+        args.destinationAppGroup = first.destinationAppGroup || first.iosDatabaseLocationAppGroup;
+        validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup');
+        validateAppGroupLocation(args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup');
+        if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup)) {
+          throw newSQLError('Source and destination database paths must be different in restoreDatabase call');
+        }
+      } else if (args.sourceName === args.destinationName) {
+        throw newSQLError('Source and destination database names must be different in restoreDatabase call on Android');
       }
       if (typeof success === 'function' || typeof error === 'function') {
         return cordova.exec(success, error, "SQLitePlugin", "restoreDatabase", [args]);

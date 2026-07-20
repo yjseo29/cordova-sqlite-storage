@@ -6,13 +6,20 @@
 
 package io.sqlc;
 
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.system.Os;
 import android.util.Log;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 
 import java.lang.IllegalArgumentException;
 
 import java.util.Map;
+import java.util.UUID;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -112,6 +119,16 @@ public class SQLitePlugin extends CordovaPlugin {
 
                 deleteDatabase(dbname, cbc);
 
+                break;
+
+            case backupDatabase:
+                o = args.getJSONObject(0);
+                this.backupDatabase(o.getString("sourceName"), o.getString("backupName"), cbc);
+                break;
+
+            case restoreDatabase:
+                o = args.getJSONObject(0);
+                this.restoreDatabase(o.getString("sourceName"), o.getString("destinationName"), o.optBoolean("deleteSource", false), cbc);
                 break;
 
             case executeSqlBatch:
@@ -301,6 +318,253 @@ public class SQLitePlugin extends CordovaPlugin {
         }
     }
 
+    private boolean databaseFilesMatch(File first, File second) throws IOException {
+        return first.getCanonicalPath().equals(second.getCanonicalPath());
+    }
+
+    private boolean hasDatabaseSidecars(File dbfile) {
+        String path = dbfile.getAbsolutePath();
+        return new File(path + "-journal").exists() ||
+            new File(path + "-wal").exists() ||
+            new File(path + "-shm").exists();
+    }
+
+    private void removeDatabaseSidecars(File dbfile) throws IOException {
+        String path = dbfile.getAbsolutePath();
+        String[] suffixes = new String[] { "-journal", "-wal", "-shm" };
+
+        for (String suffix : suffixes) {
+            File sidecar = new File(path + suffix);
+            if (sidecar.exists() && !sidecar.delete()) {
+                throw new IOException("couldn't delete SQLite sidecar: " + sidecar.getAbsolutePath());
+            }
+        }
+    }
+
+    private void deleteDatabaseFiles(File dbfile) throws IOException {
+        removeDatabaseSidecars(dbfile);
+        if (dbfile.exists() && !dbfile.delete()) {
+            throw new IOException("couldn't delete database file: " + dbfile.getAbsolutePath());
+        }
+    }
+
+    private void checkpointDatabaseFile(File dbfile) throws Exception {
+        SQLiteDatabase db = null;
+        Cursor cursor = null;
+        try {
+            db = SQLiteDatabase.openDatabase(dbfile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READWRITE);
+            cursor = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null);
+            if (cursor.moveToFirst() && cursor.getInt(0) != 0) {
+                throw new IOException("WAL checkpoint could not complete because the database is busy");
+            }
+        } finally {
+            if (cursor != null) cursor.close();
+            if (db != null) db.close();
+        }
+    }
+
+    private void validateDatabaseFile(File dbfile) throws Exception {
+        SQLiteDatabase db = null;
+        Cursor cursor = null;
+        String checkMessage = null;
+        try {
+            db = SQLiteDatabase.openDatabase(dbfile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READWRITE);
+            cursor = db.rawQuery("PRAGMA quick_check", null);
+            if (cursor.moveToFirst()) checkMessage = cursor.getString(0);
+        } finally {
+            if (cursor != null) cursor.close();
+            if (db != null) db.close();
+        }
+
+        if (!"ok".equals(checkMessage)) {
+            throw new IOException("Database failed SQLite quick_check: " + (checkMessage == null ? "no result" : checkMessage));
+        }
+    }
+
+    private void copyFile(File source, File destination) throws IOException {
+        File parent = destination.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("couldn't create database directory: " + parent.getAbsolutePath());
+        }
+
+        FileInputStream input = null;
+        FileOutputStream output = null;
+        try {
+            input = new FileInputStream(source);
+            output = new FileOutputStream(destination);
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count);
+            }
+            output.flush();
+            output.getFD().sync();
+        } finally {
+            if (output != null) output.close();
+            if (input != null) input.close();
+        }
+    }
+
+    private void installVerifiedDatabaseCopy(File source, File destination) throws Exception {
+        if (hasDatabaseSidecars(destination)) {
+            throw new IOException("The destination database has active SQLite sidecar files; close all connections before replacing it");
+        }
+
+        File temporary = new File(destination.getAbsolutePath() + ".prepare-" + UUID.randomUUID().toString() + ".tmp");
+        try {
+            copyFile(source, temporary);
+            validateDatabaseFile(temporary);
+            removeDatabaseSidecars(temporary);
+
+            if (hasDatabaseSidecars(destination)) {
+                throw new IOException("The destination database became active while it was being prepared");
+            }
+
+            Os.rename(temporary.getAbsolutePath(), destination.getAbsolutePath());
+        } finally {
+            try {
+                removeDatabaseSidecars(temporary);
+            } catch (Exception ignored) {
+                Log.w(SQLitePlugin.class.getSimpleName(), "couldn't remove temporary SQLite sidecars", ignored);
+            }
+            if (temporary.exists() && !temporary.delete()) {
+                Log.w(SQLitePlugin.class.getSimpleName(), "couldn't remove temporary database file: " + temporary.getAbsolutePath());
+            }
+        }
+    }
+
+    private void prepareClosedDestinationForRestore(File destination) throws Exception {
+        if (!hasDatabaseSidecars(destination)) return;
+        if (!destination.exists()) {
+            throw new IOException("The destination database is missing but SQLite sidecar files remain");
+        }
+
+        checkpointDatabaseFile(destination);
+        removeDatabaseSidecars(destination);
+        if (hasDatabaseSidecars(destination)) {
+            throw new IOException("The destination database still has active SQLite sidecar files after checkpoint");
+        }
+    }
+
+    private JSONObject backupDatabaseNow(String sourceName, String backupName, SQLiteAndroidDatabase openSource) throws Exception {
+        File source = this.cordova.getActivity().getDatabasePath(sourceName);
+        File backup = this.cordova.getActivity().getDatabasePath(backupName);
+
+        if (databaseFilesMatch(source, backup)) {
+            throw new IOException("Source and backup database paths must be different");
+        }
+        if (!source.exists()) {
+            throw new IOException("The backup source database does not exist on that path");
+        }
+        if (dbrmap.get(backupName) != null) {
+            throw new IOException("Close the backup database before replacing it");
+        }
+
+        if (openSource != null) {
+            if (openSource.hasActiveTransaction()) {
+                throw new IOException("Wait for the active database transaction to finish before calling backupDatabase");
+            }
+            openSource.checkpointDatabase();
+        } else {
+            checkpointDatabaseFile(source);
+        }
+
+        boolean backupExisted = backup.exists();
+        installVerifiedDatabaseCopy(source, backup);
+
+        JSONObject result = new JSONObject();
+        result.put("action", "backed-up");
+        result.put("sourceExists", true);
+        result.put("backupExisted", backupExisted);
+        result.put("backupExists", backup.exists());
+        result.put("backupUpdated", true);
+        return result;
+    }
+
+    private void backupDatabase(final String sourceName, final String backupName, final CallbackContext cbc) {
+        if (sourceName.equals(backupName)) {
+            cbc.error("Source and backup database paths must be different");
+            return;
+        }
+
+        DBRunner sourceRunner = dbrmap.get(sourceName);
+        if (sourceRunner != null) {
+            try {
+                sourceRunner.q.put(new DBQuery(backupName, cbc));
+            } catch (Exception e) {
+                cbc.error("couldn't queue database backup: " + e.getMessage());
+            }
+            return;
+        }
+
+        this.cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                try {
+                    cbc.success(backupDatabaseNow(sourceName, backupName, null));
+                } catch (Exception e) {
+                    Log.e(SQLitePlugin.class.getSimpleName(), "couldn't back up database", e);
+                    cbc.error("couldn't back up database: " + e.getMessage());
+                }
+            }
+        });
+    }
+
+    private void restoreDatabase(final String sourceName, final String destinationName, final boolean deleteSource, final CallbackContext cbc) {
+        if (sourceName.equals(destinationName)) {
+            cbc.error("Source and destination database paths must be different");
+            return;
+        }
+        if (dbrmap.get(destinationName) != null) {
+            cbc.error("Close the destination database before calling restoreDatabase");
+            return;
+        }
+        if (dbrmap.get(sourceName) != null) {
+            cbc.error("Close the restore source database before calling restoreDatabase");
+            return;
+        }
+
+        this.cordova.getThreadPool().execute(new Runnable() {
+            public void run() {
+                File source = cordova.getActivity().getDatabasePath(sourceName);
+                File destination = cordova.getActivity().getDatabasePath(destinationName);
+                try {
+                    if (databaseFilesMatch(source, destination)) {
+                        throw new IOException("Source and destination database paths must be different");
+                    }
+                    if (!source.exists()) {
+                        throw new IOException("The restore source database does not exist on that path");
+                    }
+
+                    checkpointDatabaseFile(source);
+                    validateDatabaseFile(source);
+                    boolean destinationExisted = destination.exists();
+                    prepareClosedDestinationForRestore(destination);
+                    installVerifiedDatabaseCopy(source, destination);
+
+                    boolean sourceDeleted = false;
+                    if (deleteSource) {
+                        try {
+                            deleteDatabaseFiles(source);
+                            sourceDeleted = true;
+                        } catch (Exception e) {
+                            throw new IOException("Database restored but the source could not be deleted: " + e.getMessage());
+                        }
+                    }
+
+                    JSONObject result = new JSONObject();
+                    result.put("action", "restored");
+                    result.put("destinationExisted", destinationExisted);
+                    result.put("destinationExists", destination.exists());
+                    result.put("sourceDeleted", sourceDeleted);
+                    cbc.success(result);
+                } catch (Exception e) {
+                    Log.e(SQLitePlugin.class.getSimpleName(), "couldn't restore database", e);
+                    cbc.error("couldn't restore database: " + e.getMessage());
+                }
+            }
+        });
+    }
+
     private class DBRunner implements Runnable {
         final String dbname;
         private boolean oldImpl;
@@ -338,10 +602,19 @@ public class SQLitePlugin extends CordovaPlugin {
                 dbq = q.take();
 
                 while (!dbq.stop) {
-                    mydb.executeSqlBatch(dbq.queries, dbq.jsonparams, dbq.cbc);
+                    if (dbq.backupName != null) {
+                        try {
+                            dbq.cbc.success(backupDatabaseNow(dbname, dbq.backupName, mydb));
+                        } catch (Exception e) {
+                            Log.e(SQLitePlugin.class.getSimpleName(), "couldn't back up open database", e);
+                            dbq.cbc.error("couldn't back up database: " + e.getMessage());
+                        }
+                    } else {
+                        mydb.executeSqlBatch(dbq.queries, dbq.jsonparams, dbq.cbc);
 
-                    if (this.bugWorkaround && dbq.queries.length == 1 && dbq.queries[0] == "COMMIT")
-                        mydb.bugWorkaround();
+                        if (this.bugWorkaround && dbq.queries.length == 1 && dbq.queries[0] == "COMMIT")
+                            mydb.bugWorkaround();
+                    }
 
                     dbq = q.take();
                 }
@@ -388,6 +661,7 @@ public class SQLitePlugin extends CordovaPlugin {
         final String[] queries;
         final JSONArray[] jsonparams;
         final CallbackContext cbc;
+        final String backupName;
 
         DBQuery(String[] myqueries, JSONArray[] params, CallbackContext c) {
             this.stop = false;
@@ -396,6 +670,17 @@ public class SQLitePlugin extends CordovaPlugin {
             this.queries = myqueries;
             this.jsonparams = params;
             this.cbc = c;
+            this.backupName = null;
+        }
+
+        DBQuery(String backupName, CallbackContext cbc) {
+            this.stop = false;
+            this.close = false;
+            this.delete = false;
+            this.queries = null;
+            this.jsonparams = null;
+            this.cbc = cbc;
+            this.backupName = backupName;
         }
 
         DBQuery(boolean delete, CallbackContext cbc) {
@@ -405,6 +690,7 @@ public class SQLitePlugin extends CordovaPlugin {
             this.queries = null;
             this.jsonparams = null;
             this.cbc = cbc;
+            this.backupName = null;
         }
 
         // signal the DBRunner thread to stop:
@@ -415,6 +701,7 @@ public class SQLitePlugin extends CordovaPlugin {
             this.queries = null;
             this.jsonparams = null;
             this.cbc = null;
+            this.backupName = null;
         }
     }
 
@@ -423,6 +710,8 @@ public class SQLitePlugin extends CordovaPlugin {
         open,
         close,
         delete,
+        backupDatabase,
+        restoreDatabase,
         executeSqlBatch,
         backgroundExecuteSqlBatch,
     }

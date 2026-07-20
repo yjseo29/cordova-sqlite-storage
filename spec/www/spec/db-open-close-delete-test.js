@@ -1527,7 +1527,7 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.backupDatabase with no name setting (REJECTED with exception)', function(done) {
-          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('backupDatabase is supported on iOS and Android');
 
           try {
             window.sqlitePlugin.backupDatabase({
@@ -1544,7 +1544,7 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.backupDatabase with matching source and backup paths (REJECTED with exception)', function(done) {
-          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('backupDatabase is supported on iOS and Android');
 
           try {
             window.sqlitePlugin.backupDatabase({
@@ -1562,17 +1562,23 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.backupDatabase creates a readable Documents snapshot', function(done) {
-          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('backupDatabase is supported on iOS and Android');
 
           var sourceName = 'backup-source.db';
           var backupName = 'backup-result.db';
+          var actualSourceName = isImpl2 ? 'i2-' + sourceName : sourceName;
+          var actualBackupName = isImpl2 ? 'i2-' + backupName : backupName;
+          var openTestDatabase = function(name, actualName, success, error) {
+            if (isAndroid && isImpl2) return openDatabase({ name: name }, success, error);
+            return window.sqlitePlugin.openDatabase({ name: actualName, iosDatabaseLocation: 'Documents' }, success, error);
+          };
           var remove = function(name, next) {
             window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: 'Documents' }, next, next);
           };
           var cleanup = function(sourceDb, backupDb) {
             var finish = function() {
-              remove(sourceName, function() {
-                remove(backupName, done);
+              remove(actualSourceName, function() {
+                remove(actualBackupName, done);
               });
             };
             backupDb.close(function() {
@@ -1580,15 +1586,15 @@ var mytests = function() {
             }, done.fail);
           };
 
-          remove(sourceName, function() {
-            remove(backupName, function() {
-              var sourceDb = window.sqlitePlugin.openDatabase({ name: sourceName, iosDatabaseLocation: 'Documents' }, function() {
+          remove(actualSourceName, function() {
+            remove(actualBackupName, function() {
+              var sourceDb = openTestDatabase(sourceName, actualSourceName, function() {
                 sourceDb.executeSql('CREATE TABLE backup_test (value TEXT)', [], function() {
                   sourceDb.executeSql('INSERT INTO backup_test VALUES (?)', ['from-source'], function() {
                     window.sqlitePlugin.backupDatabase({
-                      name: sourceName,
+                      name: actualSourceName,
                       sourceLocation: 'Documents',
-                      backupName: backupName,
+                      backupName: actualBackupName,
                       backupLocation: 'Documents'
                     }, function(result) {
                       expect(result.action).toBe('backed-up');
@@ -1597,7 +1603,7 @@ var mytests = function() {
                       expect(result.backupExists).toBe(true);
                       expect(result.backupUpdated).toBe(true);
 
-                      var backupDb = window.sqlitePlugin.openDatabase({ name: backupName, iosDatabaseLocation: 'Documents' }, function() {
+                      var backupDb = openTestDatabase(backupName, actualBackupName, function() {
                         backupDb.executeSql('SELECT value FROM backup_test', [], function(queryResult) {
                           expect(queryResult.rows.item(0).value).toBe('from-source');
                           cleanup(sourceDb, backupDb);
@@ -1612,7 +1618,7 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.restoreDatabase with no sourceName setting (REJECTED with exception)', function(done) {
-          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('restoreDatabase is supported on iOS and Android');
 
           try {
             window.sqlitePlugin.restoreDatabase({
@@ -1629,7 +1635,7 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.restoreDatabase with matching source and destination paths (REJECTED with exception)', function(done) {
-          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('restoreDatabase is supported on iOS and Android');
 
           try {
             window.sqlitePlugin.restoreDatabase({
@@ -1647,31 +1653,37 @@ var mytests = function() {
         }, MYTIMEOUT);
 
         it(suiteName + 'sqlitePlugin.restoreDatabase safely replaces a Documents database', function(done) {
-          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+          if (cordova.platformId !== 'ios' && cordova.platformId !== 'android') pending('restoreDatabase is supported on iOS and Android');
 
           var sourceName = 'restore-source.db';
           var destinationName = 'restore-destination.db';
+          var actualSourceName = isImpl2 ? 'i2-' + sourceName : sourceName;
+          var actualDestinationName = isImpl2 ? 'i2-' + destinationName : destinationName;
+          var openTestDatabase = function(name, actualName, success, error) {
+            if (isAndroid && isImpl2) return openDatabase({ name: name }, success, error);
+            return window.sqlitePlugin.openDatabase({ name: actualName, iosDatabaseLocation: 'Documents' }, success, error);
+          };
           var remove = function(name, next) {
             window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: 'Documents' }, next, next);
           };
           var cleanup = function() {
-            remove(sourceName, function() {
-              remove(destinationName, done);
+            remove(actualSourceName, function() {
+              remove(actualDestinationName, done);
             });
           };
 
-          remove(sourceName, function() {
-            remove(destinationName, function() {
-              var sourceDb = window.sqlitePlugin.openDatabase({ name: sourceName, iosDatabaseLocation: 'Documents' }, function() {
+          remove(actualSourceName, function() {
+            remove(actualDestinationName, function() {
+              var sourceDb = openTestDatabase(sourceName, actualSourceName, function() {
                 sourceDb.executeSql('CREATE TABLE restore_test (value TEXT)', [], function() {
                   sourceDb.executeSql('INSERT INTO restore_test VALUES (?)', ['from-source'], function() {
                     sourceDb.close(function() {
-                      var destinationDb = window.sqlitePlugin.openDatabase({ name: destinationName, iosDatabaseLocation: 'Documents' }, function() {
+                      var destinationDb = openTestDatabase(destinationName, actualDestinationName, function() {
                         destinationDb.close(function() {
                           window.sqlitePlugin.restoreDatabase({
-                            sourceName: sourceName,
+                            sourceName: actualSourceName,
                             sourceLocation: 'Documents',
-                            name: destinationName,
+                            name: actualDestinationName,
                             destinationLocation: 'Documents',
                             deleteSource: true
                           }, function(result) {
@@ -1680,7 +1692,7 @@ var mytests = function() {
                             expect(result.destinationExists).toBe(true);
                             expect(result.sourceDeleted).toBe(true);
 
-                            var restoredDb = window.sqlitePlugin.openDatabase({ name: destinationName, iosDatabaseLocation: 'Documents' }, function() {
+                            var restoredDb = openTestDatabase(destinationName, actualDestinationName, function() {
                               restoredDb.executeSql('SELECT value FROM restore_test', [], function(queryResult) {
                                 expect(queryResult.rows.item(0).value).toBe('from-source');
                                 restoredDb.close(cleanup, done.fail);

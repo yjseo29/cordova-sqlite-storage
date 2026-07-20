@@ -13,6 +13,7 @@ import java.io.File;
 import java.lang.Number;
 
 import java.sql.SQLException;
+import java.util.Locale;
 
 import org.apache.cordova.CallbackContext;
 
@@ -65,6 +66,22 @@ class SQLiteConnectorDatabase extends SQLiteAndroidDatabase
         }
     }
 
+    @Override
+    void checkpointDatabase() throws Exception {
+        if (mydb == null) {
+            throw new SQLException("database has been closed");
+        }
+
+        SQLiteStatement statement = mydb.prepareStatement("PRAGMA wal_checkpoint(TRUNCATE)");
+        try {
+            if (statement.step() && statement.getColumnLong(0) != 0) {
+                throw new SQLException("WAL checkpoint could not complete because the database is busy");
+            }
+        } finally {
+            statement.dispose();
+        }
+    }
+
     /**
      * Ignore Android bug workaround for NDK version
      */
@@ -108,6 +125,15 @@ class SQLiteConnectorDatabase extends SQLiteAndroidDatabase
                 queryResult = this.executeSQLiteStatement(query, jsonparams[i], cbc);
                 long newTotal = mydb.getTotalChanges();
                 long rowsAffected = newTotal - lastTotal;
+
+                String normalizedQuery = query.trim().toUpperCase(Locale.ENGLISH);
+                if (normalizedQuery.startsWith("BEGIN")) {
+                    isTransactionActive = true;
+                } else if (normalizedQuery.startsWith("COMMIT") ||
+                           normalizedQuery.startsWith("END") ||
+                           normalizedQuery.startsWith("ROLLBACK")) {
+                    isTransactionActive = false;
+                }
 
                 queryResult.put("rowsAffected", rowsAffected);
                 if (rowsAffected > 0) {

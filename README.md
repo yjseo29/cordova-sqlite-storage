@@ -1030,9 +1030,9 @@ On non-iOS platforms, `prepareDatabase()` is a no-op that resolves with `{ actio
 - An error resolving an App Group, opening SQLite, validating the snapshot, or replacing a destination rejects the Promise. Do not continue to `openDatabase()` in the error path without deciding how the app should handle recovery.
 - Primary, legacy, and backup must resolve to three different paths when all three are configured.
 
-### Create an uploadable iOS database backup
+### Create an uploadable database backup on iOS or Android
 
-Use `backupDatabase()` when only a fresh backup file is needed, for example immediately before uploading a database to cloud storage. `prepareDatabase()` keeps its migration and optional backup behavior, and both methods share the same native SQLite snapshot implementation.
+Use `backupDatabase()` when only a fresh backup file is needed, for example immediately before uploading a database to cloud storage. `prepareDatabase()` keeps its iOS migration and optional backup behavior, and both iOS methods share the same native SQLite snapshot implementation.
 
 The source database may remain open, but wait for all application write transactions to finish before starting the backup:
 
@@ -1061,15 +1061,29 @@ await window.sqlitePlugin.backupDatabase({
 });
 ```
 
+On Android, both names are resolved in the app's internal `databases` directory. The iOS location options are optional and ignored, so an Android-only call is:
+
+```js
+await window.sqlitePlugin.backupDatabase({
+  name: 'my.db',
+  backupName: 'my.backup.db'
+});
+
+var androidBackupPath = cordova.file.applicationStorageDirectory +
+  'databases/my.backup.db';
+```
+
+`prepareDatabase()` remains an iOS migration helper and is still a no-op on Android. Call `backupDatabase()` explicitly before an Android upload.
+
 #### Backup options
 
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `name` | yes | none | Source primary database file name. |
-| `sourceLocation` | yes | none | Source location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `sourceLocation` | iOS only | none | iOS source location: `default`, `Library`, `Documents`, or `AppGroup`. Ignored on Android. |
 | `sourceAppGroup` | for App Group source | none | App Group identifier for `sourceLocation: 'AppGroup'`. `iosDatabaseLocationAppGroup` is also accepted as an alias. |
 | `backupName` | yes | none | Dedicated backup file name. It must resolve to a different path from the source. |
-| `backupLocation` | yes | none | Backup location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `backupLocation` | iOS only | none | iOS backup location: `default`, `Library`, `Documents`, or `AppGroup`. Ignored on Android. |
 | `backupAppGroup` | for App Group backup | none | App Group identifier for `backupLocation: 'AppGroup'`. |
 
 The resolved value has this shape:
@@ -1086,11 +1100,13 @@ The resolved value has this shape:
 
 `backupDatabase()` always refreshes an existing backup. It does not need an `overwrite` option and never deletes the source. The method rejects instead of returning an empty result when the source is missing.
 
-The backup uses the SQLite Online Backup API, includes committed WAL data, validates the temporary snapshot with `PRAGMA quick_check`, and atomically replaces the backup file. Do not open the dedicated backup from the app or an extension. The method rejects if the backup is open through this plugin or has SQLite sidecar files indicating that it may still be in use.
+On iOS, the backup uses the SQLite Online Backup API and includes committed WAL data. On Android, an open source is backed up inside its DBRunner queue after all earlier queued SQL has completed and `PRAGMA wal_checkpoint(TRUNCATE)` succeeds; a closed source is opened briefly for the same checkpoint. An Android backup rejects while a transaction is still active. Both platforms validate a temporary snapshot with `PRAGMA quick_check` and atomically replace the backup file.
 
-On non-iOS platforms, `backupDatabase()` resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
+Do not open the dedicated backup from the app or an extension. The method rejects if the backup is open through this plugin or has SQLite sidecar files indicating that it may still be in use. Android source and backup names must differ because both resolve to the same internal directory.
 
-### Restore a downloaded iOS database safely
+On platforms other than iOS and Android, `backupDatabase()` resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
+
+### Restore a downloaded database safely on iOS or Android
 
 Use `restoreDatabase()` after downloading a database to a temporary file. Unlike `copyDatabase()`, this method validates the source, creates a consistent SQLite snapshot, validates the snapshot, and only then replaces the destination database.
 
@@ -1129,15 +1145,33 @@ await window.sqlitePlugin.restoreDatabase({
 });
 ```
 
+On Android, download the temporary source under a different name in the internal `databases` directory, close the primary, and omit all iOS location options:
+
+```js
+var androidDownloadPath = cordova.file.applicationStorageDirectory +
+  'databases/downloaded.db';
+
+// Download to androidDownloadPath, then close the primary database.
+await new Promise(function(resolve, reject) {
+  window.db.close(resolve, reject);
+});
+
+await window.sqlitePlugin.restoreDatabase({
+  sourceName: 'downloaded.db',
+  name: 'my.db',
+  deleteSource: true
+});
+```
+
 #### Restore options
 
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `sourceName` | yes | none | Downloaded or otherwise prepared source database file name. |
-| `sourceLocation` | yes | none | Source location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `sourceLocation` | iOS only | none | iOS source location: `default`, `Library`, `Documents`, or `AppGroup`. Ignored on Android. |
 | `sourceAppGroup` | for App Group source | none | App Group identifier for `sourceLocation: 'AppGroup'`. |
 | `name` | yes | none | Destination primary database file name. |
-| `destinationLocation` | yes | none | Destination location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `destinationLocation` | iOS only | none | iOS destination location: `default`, `Library`, `Documents`, or `AppGroup`. Ignored on Android. |
 | `destinationAppGroup` | for App Group destination | none | App Group identifier for `destinationLocation: 'AppGroup'`. `iosDatabaseLocationAppGroup` is also accepted as an alias. |
 | `deleteSource` | no | `false` | Delete the source database and SQLite sidecars only after the destination has been restored successfully. |
 
@@ -1155,14 +1189,15 @@ The resolved value has this shape:
 #### Restore behavior and precautions
 
 - The source and destination must resolve to different paths. Download to a dedicated name such as `downloaded.db`; do not download directly over the primary database.
-- The source is opened read-only and checked with `PRAGMA quick_check` before the destination is touched.
-- Restore uses the SQLite Online Backup API to create a temporary standalone snapshot. The snapshot is checked again and then atomically replaces the destination.
+- The source is checked with `PRAGMA quick_check` before the destination is touched. Android also checkpoints any committed source WAL data before validation.
+- iOS restore uses the SQLite Online Backup API. Android uses a checkpointed file snapshot. Both create and validate a temporary standalone database before atomically replacing the destination.
 - Close the destination database and await its close callback before calling `restoreDatabase()`. The method rejects when that database is still open through this plugin.
 - The method also rejects when destination `-journal`, `-wal`, or `-shm` files remain. This prevents replacing a database that may still be in use or not fully checkpointed.
 - For an App Group database, the containing app and every extension must coordinate access. Closing the Cordova database does not close a widget's separate SQLite connection. Prevent widget reads and writes during restore, release its connection, restore, and then reload widget timelines.
 - A validation or snapshot failure rejects the Promise before installing the downloaded database. `deleteSource` runs only after a successful restore.
 - If restore succeeds but source deletion fails, the destination remains restored and the Promise rejects with an error explaining that cleanup failed.
-- On non-iOS platforms, the method resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
+- On Android, `sourceName` and `name` both resolve in the app's internal `databases` directory and must differ.
+- On platforms other than iOS and Android, the method resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
 
 **WARNING:** Again, the new "default" iosDatabaseLocation value is *NOT* the same as the old default location and would break an upgrade for an app using the old default value (0) on iOS.
 

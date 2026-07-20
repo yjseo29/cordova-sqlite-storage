@@ -100,6 +100,26 @@ class SQLiteAndroidDatabase
         }
     }
 
+    void checkpointDatabase() throws Exception {
+        if (mydb == null) {
+            throw new SQLiteException("database has been closed");
+        }
+
+        Cursor cursor = null;
+        try {
+            cursor = mydb.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null);
+            if (cursor.moveToFirst() && cursor.getInt(0) != 0) {
+                throw new SQLiteException("WAL checkpoint could not complete because the database is busy");
+            }
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+    }
+
+    boolean hasActiveTransaction() {
+        return isTransactionActive;
+    }
+
     void bugWorkaround() throws Exception {
         this.closeDatabaseNow();
         this.open(dbFile);

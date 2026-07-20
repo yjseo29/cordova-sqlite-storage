@@ -873,7 +873,7 @@
           cordova.exec resolve, reject, "SQLitePlugin", "prepareDatabase", [ args ]
 
       backupDatabase: (first, success, error) ->
-        if cordova.platformId isnt 'ios'
+        if cordova.platformId isnt 'ios' and cordova.platformId isnt 'android'
           result = action: 'skipped', platform: cordova.platformId
           if typeof success is 'function'
             return nextTick -> success result
@@ -886,28 +886,32 @@
         if !first.name or typeof first.name isnt 'string'
           throw newSQLError 'Valid source database name string is required in backupDatabase call'
 
-        if !first.sourceLocation
-          throw newSQLError 'sourceLocation is required in backupDatabase call'
-
         if !first.backupName or typeof first.backupName isnt 'string'
           throw newSQLError 'Valid backupName string is required in backupDatabase call'
 
-        if !first.backupLocation
-          throw newSQLError 'backupLocation is required in backupDatabase call'
-
         args =
           sourceName: first.name
-          sourceDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'backupDatabase'
-          sourceAppGroup: first.sourceAppGroup or first.iosDatabaseLocationAppGroup
           backupName: first.backupName
-          backupDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.backupLocation}, 'backupDatabase'
-          backupAppGroup: first.backupAppGroup
 
-        validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup'
-        validateAppGroupLocation args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup'
+        if cordova.platformId is 'ios'
+          if !first.sourceLocation
+            throw newSQLError 'sourceLocation is required in backupDatabase call on iOS'
 
-        if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup
-          throw newSQLError 'Source and backup database paths must be different in backupDatabase call'
+          if !first.backupLocation
+            throw newSQLError 'backupLocation is required in backupDatabase call on iOS'
+
+          args.sourceDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'backupDatabase'
+          args.sourceAppGroup = first.sourceAppGroup or first.iosDatabaseLocationAppGroup
+          args.backupDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.backupLocation}, 'backupDatabase'
+          args.backupAppGroup = first.backupAppGroup
+
+          validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup'
+          validateAppGroupLocation args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup'
+
+          if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup
+            throw newSQLError 'Source and backup database paths must be different in backupDatabase call'
+        else if args.sourceName is args.backupName
+          throw newSQLError 'Source and backup database names must be different in backupDatabase call on Android'
 
         if typeof success is 'function' or typeof error is 'function'
           return cordova.exec success, error, "SQLitePlugin", "backupDatabase", [ args ]
@@ -916,7 +920,7 @@
           cordova.exec resolve, reject, "SQLitePlugin", "backupDatabase", [ args ]
 
       restoreDatabase: (first, success, error) ->
-        if cordova.platformId isnt 'ios'
+        if cordova.platformId isnt 'ios' and cordova.platformId isnt 'android'
           result = action: 'skipped', platform: cordova.platformId
           if typeof success is 'function'
             return nextTick -> success result
@@ -929,29 +933,33 @@
         if !first.sourceName or typeof first.sourceName isnt 'string'
           throw newSQLError 'Valid sourceName string is required in restoreDatabase call'
 
-        if !first.sourceLocation
-          throw newSQLError 'sourceLocation is required in restoreDatabase call'
-
         if !first.name or typeof first.name isnt 'string'
           throw newSQLError 'Valid destination database name string is required in restoreDatabase call'
 
-        if !first.destinationLocation
-          throw newSQLError 'destinationLocation is required in restoreDatabase call'
-
         args =
           sourceName: first.sourceName
-          sourceDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'restoreDatabase'
-          sourceAppGroup: first.sourceAppGroup
           destinationName: first.name
-          destinationDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.destinationLocation}, 'restoreDatabase'
-          destinationAppGroup: first.destinationAppGroup or first.iosDatabaseLocationAppGroup
           deleteSource: first.deleteSource is true
 
-        validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup'
-        validateAppGroupLocation args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup'
+        if cordova.platformId is 'ios'
+          if !first.sourceLocation
+            throw newSQLError 'sourceLocation is required in restoreDatabase call on iOS'
 
-        if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup
-          throw newSQLError 'Source and destination database paths must be different in restoreDatabase call'
+          if !first.destinationLocation
+            throw newSQLError 'destinationLocation is required in restoreDatabase call on iOS'
+
+          args.sourceDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'restoreDatabase'
+          args.sourceAppGroup = first.sourceAppGroup
+          args.destinationDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.destinationLocation}, 'restoreDatabase'
+          args.destinationAppGroup = first.destinationAppGroup or first.iosDatabaseLocationAppGroup
+
+          validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup'
+          validateAppGroupLocation args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup'
+
+          if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup
+            throw newSQLError 'Source and destination database paths must be different in restoreDatabase call'
+        else if args.sourceName is args.destinationName
+          throw newSQLError 'Source and destination database names must be different in restoreDatabase call on Android'
 
         if typeof success is 'function' or typeof error is 'function'
           return cordova.exec success, error, "SQLitePlugin", "restoreDatabase", [ args ]
