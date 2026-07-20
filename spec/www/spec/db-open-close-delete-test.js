@@ -1352,6 +1352,71 @@ var mytests = function() {
           }
         }, MYTIMEOUT);
 
+        it(suiteName + 'sqlitePlugin.prepareDatabase with no name setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({ primaryLocation: 'Documents' });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.prepareDatabase with no primaryLocation setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({ name: 'my.db' });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + "sqlitePlugin.prepareDatabase with AppGroup primary but no primaryAppGroup (REJECTED with exception)", function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({ name: 'my.db', primaryLocation: 'AppGroup' });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.prepareDatabase with backupLocation but no backupName (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({ name: 'my.db', primaryLocation: 'AppGroup', primaryAppGroup: 'group.example', backupLocation: 'Documents' });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.prepareDatabase with matching primary and legacy paths (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({ name: 'my.db', primaryLocation: 'Documents', legacyLocation: 'Documents' });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
       }
 
     }

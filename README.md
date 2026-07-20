@@ -910,6 +910,119 @@ The `deleteOriginal` and `overwrite` options default to `false`. When `overwrite
 
 On non-iOS platforms, `copyDatabase()` is a no-op that succeeds, so the same startup migration code may be called on Android without checking `cordova.platformId`.
 
+### Prepare, migrate, back up, and restore an iOS database
+
+Use `prepareDatabase()` before `openDatabase()` when one location is the authoritative database and the app also needs one-time migration and an optional backup. The method is safe to call on every app startup. It never replaces an existing primary database with a legacy or backup database.
+
+The following example performs both of these operations:
+
+1. On the first run, migrate `Documents/my.db` to the App Group as the primary database.
+2. Create or refresh `Documents/my.backup.db` from the App Group primary database.
+
+```js
+async function openPreparedDatabase() {
+  var preparation = await window.sqlitePlugin.prepareDatabase({
+    name: 'my.db',
+
+    primaryLocation: 'AppGroup',
+    primaryAppGroup: 'group.com.example.myapp',
+
+    legacyLocation: 'Documents',
+    legacyName: 'my.db',
+
+    backupLocation: 'Documents',
+    backupName: 'my.backup.db',
+
+    migrateLegacyIfNeeded: true,
+    backupIfExists: true,
+    restoreIfMissing: true
+  });
+
+  console.log('database preparation:', preparation);
+
+  return window.sqlitePlugin.openDatabase({
+    name: 'my.db',
+    iosDatabaseLocation: 'AppGroup',
+    iosDatabaseLocationAppGroup: 'group.com.example.myapp'
+  }, successcb, errorcb);
+}
+
+openPreparedDatabase().catch(function(error) {
+  console.log('database preparation failed:', error);
+});
+```
+
+The three Boolean options in this example may be omitted. They default to `true` when their corresponding legacy or backup location is configured.
+
+#### Options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `name` | yes | none | Primary database file name. |
+| `primaryLocation` | yes | none | Primary location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `primaryAppGroup` | for App Group primary | none | App Group identifier for `primaryLocation: 'AppGroup'`. `iosDatabaseLocationAppGroup` is also accepted as an alias for this primary option. |
+| `legacyLocation` | no | none | Previous database location. Omit it to disable legacy migration. |
+| `legacyName` | no | `name` | Previous database file name. Requires `legacyLocation`. |
+| `legacyAppGroup` | for App Group legacy | none | App Group identifier for `legacyLocation: 'AppGroup'`. |
+| `migrateLegacyIfNeeded` | no | `true` when `legacyLocation` is set | Use the legacy database only when the primary database is missing. |
+| `backupLocation` | no | none | Backup location. Omit it to disable both backup creation and automatic restore. |
+| `backupName` | when `backupLocation` is set | none | Dedicated backup file name. It must not resolve to the primary or legacy path. |
+| `backupAppGroup` | for App Group backup | none | App Group identifier for `backupLocation: 'AppGroup'`. |
+| `backupIfExists` | no | `true` when `backupLocation` is set | Create or replace the backup from the primary database whenever a primary database exists after preparation. |
+| `restoreIfMissing` | no | `true` when `backupLocation` is set | Restore the backup only when the primary database is missing and no enabled legacy migration is available. |
+
+`legacyLocation` and `backupLocation` are independent. For example, a database can be migrated from `Library` to `Documents` without configuring a backup:
+
+```js
+await window.sqlitePlugin.prepareDatabase({
+  name: 'my.db',
+  primaryLocation: 'Documents',
+  legacyLocation: 'Library'
+});
+```
+
+Omitting `backupLocation` means no backup is created and no backup restore is attempted. `backupName` must also be omitted in that case.
+
+#### Processing order and cases
+
+The primary database is authoritative. `prepareDatabase()` checks files in this order:
+
+| Files and options at method start | Result |
+| --- | --- |
+| Primary exists; backup is enabled | Legacy and restore are ignored. A consistent primary snapshot replaces the dedicated backup. `action` is `backed-up`. |
+| Primary exists; backup is disabled | No files are changed. `action` is `ready`. |
+| Primary missing; enabled legacy exists | Legacy is snapshotted to primary. If backup is enabled, the new primary is then snapshotted to backup. `action` is `migrated`. |
+| Primary and enabled legacy missing; enabled backup exists | Backup is restored to primary. The same backup is not immediately rewritten. `action` is `restored`. |
+| Primary missing; legacy migration disabled; backup restore enabled and backup exists | Legacy is ignored and backup is restored. `action` is `restored`. |
+| Primary, usable legacy, and usable backup are all missing | No file is created by this method. `action` is `new`; the following `openDatabase()` call creates the new primary database. |
+
+The resolved value is an object with these fields:
+
+```js
+{
+  action: 'migrated', // new, ready, migrated, restored, backed-up, or skipped
+  primaryExisted: false,
+  primaryExists: true,
+  legacyExists: true,
+  backupExists: false, // existence when preparation started
+  backupUpdated: true
+}
+```
+
+On non-iOS platforms, `prepareDatabase()` is a no-op that resolves with `{ action: 'skipped', platform: cordova.platformId }`. Application startup code does not need a platform check.
+
+#### Important behavior and precautions
+
+- Call `prepareDatabase()` and await it before calling `openDatabase()` or allowing the app and widget to access the primary database.
+- Migration and restore never overwrite an existing primary database. File existence, rather than a separate preference flag, determines whether migration or restore is needed.
+- The legacy database is retained after migration. Use a different `backupName`; the legacy source and the regularly refreshed backup cannot be the same path.
+- The backup file is a recovery copy, not a second live database. Do not open it from the app or widget. Both should use the App Group primary database when both can write.
+- Snapshots use the SQLite Online Backup API, include committed WAL data, run `PRAGMA quick_check`, and replace the destination through a temporary file. This avoids the inconsistent copies that can result from copying only a live `.db` file.
+- A startup backup contains data committed before that startup. Changes made during the current session are included when preparation runs on the next startup.
+- If migration succeeds but the following backup update fails, the Promise rejects while the new primary remains in place. Calling `prepareDatabase()` again keeps that primary and retries only the backup.
+- An error resolving an App Group, opening SQLite, validating the snapshot, or replacing a destination rejects the Promise. Do not continue to `openDatabase()` in the error path without deciding how the app should handle recovery.
+- Primary, legacy, and backup must resolve to three different paths when all three are configured.
+
 **WARNING:** Again, the new "default" iosDatabaseLocation value is *NOT* the same as the old default location and would break an upgrade for an app using the old default value (0) on iOS.
 
 DEPRECATED ALTERNATIVE to be removed in an upcoming release:

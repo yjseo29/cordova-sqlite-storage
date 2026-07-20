@@ -9,6 +9,7 @@
 #import "SQLitePlugin.h"
 
 #import "sqlite3.h"
+#include <string.h>
 
 // Defines Macro to only log lines when in DEBUG mode
 #ifdef DEBUG
@@ -129,6 +130,159 @@
 
     NSString *dbPath = [dbdir stringByAppendingPathComponent: dbFile];
     return dbPath;
+}
+
+-(BOOL) validateDatabaseAtPath:(NSString *)dbPath errorMessage:(NSString **)errorMessage
+{
+    sqlite3 *db = NULL;
+    sqlite3_stmt *statement = NULL;
+    int openResult = sqlite3_open_v2([dbPath UTF8String], &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, NULL);
+
+    if (openResult != SQLITE_OK) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Unable to open prepared database for validation: %s", db != NULL ? sqlite3_errmsg(db) : "unknown SQLite error"];
+        }
+        if (db != NULL) sqlite3_close(db);
+        return NO;
+    }
+
+    int prepareResult = sqlite3_prepare_v2(db, "PRAGMA quick_check;", -1, &statement, NULL);
+    BOOL valid = NO;
+
+    if (prepareResult == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW) {
+        const unsigned char *result = sqlite3_column_text(statement, 0);
+        valid = result != NULL && strcmp((const char *)result, "ok") == 0;
+    }
+
+    if (!valid && errorMessage != NULL) {
+        *errorMessage = [NSString stringWithFormat:@"Prepared database failed SQLite quick_check: %s", sqlite3_errmsg(db)];
+    }
+
+    if (statement != NULL) sqlite3_finalize(statement);
+    sqlite3_close(db);
+    return valid;
+}
+
+-(BOOL) removeDatabaseSidecarsAtPath:(NSString *)dbPath errorMessage:(NSString **)errorMessage
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    for (NSString *suffix in @[@"-journal", @"-wal", @"-shm"]) {
+        NSString *sidecarPath = [dbPath stringByAppendingString:suffix];
+        if (![fileManager fileExistsAtPath:sidecarPath]) continue;
+
+        NSError *error = nil;
+        if (![fileManager removeItemAtPath:sidecarPath error:&error]) {
+            if (errorMessage != NULL) {
+                *errorMessage = [NSString stringWithFormat:@"Unable to remove destination database sidecar: %@", error];
+            }
+            return NO;
+        }
+    }
+
+    return YES;
+}
+
+-(BOOL) createDatabaseSnapshotFromPath:(NSString *)sourcePath toPath:(NSString *)destinationPath errorMessage:(NSString **)errorMessage
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSString *temporaryPath = [NSString stringWithFormat:@"%@.prepare-%@.tmp", destinationPath, [[NSUUID UUID] UUIDString]];
+    sqlite3 *sourceDB = NULL;
+    sqlite3 *destinationDB = NULL;
+    sqlite3_backup *backup = NULL;
+    BOOL success = NO;
+    int sourceOpenResult;
+    int destinationOpenResult;
+    int backupResult = SQLITE_OK;
+    int finishResult = SQLITE_OK;
+    int busyAttempts = 0;
+    NSError *fileError = nil;
+
+    sourceOpenResult = sqlite3_open_v2([sourcePath UTF8String], &sourceDB, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, NULL);
+    if (sourceOpenResult != SQLITE_OK) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Unable to open source database for backup: %s", sourceDB != NULL ? sqlite3_errmsg(sourceDB) : "unknown SQLite error"];
+        }
+        goto cleanup;
+    }
+
+    destinationOpenResult = sqlite3_open_v2([temporaryPath UTF8String], &destinationDB, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, NULL);
+    if (destinationOpenResult != SQLITE_OK) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Unable to create temporary database backup: %s", destinationDB != NULL ? sqlite3_errmsg(destinationDB) : "unknown SQLite error"];
+        }
+        goto cleanup;
+    }
+
+    sqlite3_busy_timeout(sourceDB, 5000);
+    sqlite3_busy_timeout(destinationDB, 5000);
+    backup = sqlite3_backup_init(destinationDB, "main", sourceDB, "main");
+
+    if (backup == NULL) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Unable to initialize SQLite backup: %s", sqlite3_errmsg(destinationDB)];
+        }
+        goto cleanup;
+    }
+
+    while (YES) {
+        backupResult = sqlite3_backup_step(backup, 128);
+
+        if (backupResult == SQLITE_DONE) break;
+        if (backupResult == SQLITE_OK) {
+            busyAttempts = 0;
+            continue;
+        }
+        if ((backupResult == SQLITE_BUSY || backupResult == SQLITE_LOCKED) && busyAttempts < 100) {
+            busyAttempts++;
+            [NSThread sleepForTimeInterval:0.05];
+            continue;
+        }
+        break;
+    }
+
+    finishResult = sqlite3_backup_finish(backup);
+    backup = NULL;
+
+    if (backupResult != SQLITE_DONE || finishResult != SQLITE_OK) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"SQLite backup failed (%d/%d): %s", backupResult, finishResult, sqlite3_errmsg(destinationDB)];
+        }
+        goto cleanup;
+    }
+
+    sqlite3_close(destinationDB);
+    destinationDB = NULL;
+    sqlite3_close(sourceDB);
+    sourceDB = NULL;
+
+    if (![self validateDatabaseAtPath:temporaryPath errorMessage:errorMessage]) goto cleanup;
+    if (![self removeDatabaseSidecarsAtPath:destinationPath errorMessage:errorMessage]) goto cleanup;
+
+    if ([fileManager fileExistsAtPath:destinationPath]) {
+        NSURL *destinationURL = [NSURL fileURLWithPath:destinationPath];
+        NSURL *temporaryURL = [NSURL fileURLWithPath:temporaryPath];
+        if (![fileManager replaceItemAtURL:destinationURL withItemAtURL:temporaryURL backupItemName:nil options:0 resultingItemURL:nil error:&fileError]) {
+            if (errorMessage != NULL) {
+                *errorMessage = [NSString stringWithFormat:@"Unable to replace destination database: %@", fileError];
+            }
+            goto cleanup;
+        }
+    } else if (![fileManager moveItemAtPath:temporaryPath toPath:destinationPath error:&fileError]) {
+        if (errorMessage != NULL) {
+            *errorMessage = [NSString stringWithFormat:@"Unable to install prepared database: %@", fileError];
+        }
+        goto cleanup;
+    }
+
+    success = YES;
+
+cleanup:
+    if (backup != NULL) sqlite3_backup_finish(backup);
+    if (destinationDB != NULL) sqlite3_close(destinationDB);
+    if (sourceDB != NULL) sqlite3_close(sourceDB);
+    if ([fileManager fileExistsAtPath:temporaryPath]) [fileManager removeItemAtPath:temporaryPath error:nil];
+    return success;
 }
 
 -(void)echoStringValue: (CDVInvokedUrlCommand*)command
@@ -423,6 +577,96 @@
 
     NSString *resultMessage = destinationExists ? @"Database overwritten" : @"Database copied";
     pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:resultMessage];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+-(void) prepareDatabase: (CDVInvokedUrlCommand*)command
+{
+    [self.commandDelegate runInBackground:^{
+        [self prepareDatabaseNow: command];
+    }];
+}
+
+-(void)prepareDatabaseNow: (CDVInvokedUrlCommand*)command
+{
+    NSMutableDictionary *options = [command.arguments objectAtIndex:0];
+    NSString *primaryName = [options objectForKey:@"primaryName"];
+    NSString *primaryLocation = [options objectForKey:@"primaryDblocation"];
+    NSString *primaryAppGroup = [options objectForKey:@"primaryAppGroup"];
+    NSString *legacyName = [options objectForKey:@"legacyName"];
+    NSString *legacyLocation = [options objectForKey:@"legacyDblocation"];
+    NSString *legacyAppGroup = [options objectForKey:@"legacyAppGroup"];
+    NSString *backupName = [options objectForKey:@"backupName"];
+    NSString *backupLocation = [options objectForKey:@"backupDblocation"];
+    NSString *backupAppGroup = [options objectForKey:@"backupAppGroup"];
+    BOOL migrateLegacyIfNeeded = [[options objectForKey:@"migrateLegacyIfNeeded"] boolValue];
+    BOOL backupIfExists = [[options objectForKey:@"backupIfExists"] boolValue];
+    BOOL restoreIfMissing = [[options objectForKey:@"restoreIfMissing"] boolValue];
+
+    NSString *primaryPath = [self getDBPath:primaryName at:primaryLocation appGroup:primaryAppGroup];
+    NSString *legacyPath = legacyLocation != NULL ? [self getDBPath:legacyName at:legacyLocation appGroup:legacyAppGroup] : NULL;
+    NSString *backupPath = backupLocation != NULL ? [self getDBPath:backupName at:backupLocation appGroup:backupAppGroup] : NULL;
+
+    if (primaryPath == NULL || (legacyLocation != NULL && legacyPath == NULL) || (backupLocation != NULL && backupPath == NULL)) {
+        CDVPluginResult *pathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: prepareDatabase with no valid database path found"];
+        [self.commandDelegate sendPluginResult:pathError callbackId:command.callbackId];
+        return;
+    }
+
+    if ((legacyPath != NULL && [primaryPath isEqualToString:legacyPath]) ||
+        (backupPath != NULL && [primaryPath isEqualToString:backupPath]) ||
+        (legacyPath != NULL && backupPath != NULL && [legacyPath isEqualToString:backupPath])) {
+        CDVPluginResult *samePathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Primary, legacy, and backup database paths must be different"];
+        [self.commandDelegate sendPluginResult:samePathError callbackId:command.callbackId];
+        return;
+    }
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    BOOL primaryExisted = [fileManager fileExistsAtPath:primaryPath];
+    BOOL legacyExists = legacyPath != NULL && [fileManager fileExistsAtPath:legacyPath];
+    BOOL backupExists = backupPath != NULL && [fileManager fileExistsAtPath:backupPath];
+    BOOL backupUpdated = NO;
+    NSString *action = @"new";
+    NSString *errorMessage = nil;
+
+    if (primaryExisted) {
+        action = @"ready";
+    } else if (migrateLegacyIfNeeded && legacyExists) {
+        if (![self createDatabaseSnapshotFromPath:legacyPath toPath:primaryPath errorMessage:&errorMessage]) {
+            CDVPluginResult *migrationError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+            [self.commandDelegate sendPluginResult:migrationError callbackId:command.callbackId];
+            return;
+        }
+        action = @"migrated";
+    } else if (restoreIfMissing && backupExists) {
+        if (![self createDatabaseSnapshotFromPath:backupPath toPath:primaryPath errorMessage:&errorMessage]) {
+            CDVPluginResult *restoreError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+            [self.commandDelegate sendPluginResult:restoreError callbackId:command.callbackId];
+            return;
+        }
+        action = @"restored";
+    }
+
+    BOOL primaryNowExists = [fileManager fileExistsAtPath:primaryPath];
+    if (backupIfExists && backupPath != NULL && primaryNowExists && ![action isEqualToString:@"restored"]) {
+        if (![self createDatabaseSnapshotFromPath:primaryPath toPath:backupPath errorMessage:&errorMessage]) {
+            CDVPluginResult *backupError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+            [self.commandDelegate sendPluginResult:backupError callbackId:command.callbackId];
+            return;
+        }
+        backupUpdated = YES;
+        if ([action isEqualToString:@"ready"]) action = @"backed-up";
+    }
+
+    NSDictionary *result = @{
+        @"action": action,
+        @"primaryExisted": @(primaryExisted),
+        @"primaryExists": @(primaryNowExists),
+        @"legacyExists": @(legacyExists),
+        @"backupExists": @(backupExists),
+        @"backupUpdated": @(backupUpdated)
+    };
+    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 

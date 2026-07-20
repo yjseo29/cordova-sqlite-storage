@@ -632,6 +632,10 @@
         throw newSQLError "Valid #{optionName} string setting is required when using iosDatabaseLocation: \"AppGroup\" in #{callName} call"
       return
 
+    databaseLocationsMatch = (firstName, firstLocation, firstAppGroup, secondName, secondLocation, secondAppGroup) ->
+      firstName is secondName and firstLocation is secondLocation and
+        (firstLocation isnt 'appgroup' or firstAppGroup is secondAppGroup)
+
     SQLiteFactory =
       ###
       NOTE: this function should NOT be translated from Javascript
@@ -782,13 +786,83 @@
         if typeof success is 'function' or typeof error is 'function'
           return cordova.exec success, error, "SQLitePlugin", "copyDatabase", [ args ]
 
-        promise = new Promise (ok, fail) ->
-          resolve = ok
-          reject = fail
-          return
+        new Promise (resolve, reject) ->
+          cordova.exec resolve, reject, "SQLitePlugin", "copyDatabase", [ args ]
 
-        cordova.exec resolve, reject, "SQLitePlugin", "copyDatabase", [ args ]
-        promise
+      prepareDatabase: (first, success, error) ->
+        if cordova.platformId isnt 'ios'
+          result = action: 'skipped', platform: cordova.platformId
+          if typeof success is 'function'
+            return nextTick -> success result
+
+          return Promise.resolve result
+
+        if !first || first.constructor isnt Object
+          throw newSQLError 'Sorry first prepareDatabase argument must be an object'
+
+        if !first.name or typeof first.name isnt 'string'
+          throw newSQLError 'Valid database name string is required in prepareDatabase call'
+
+        if !first.primaryLocation
+          throw newSQLError 'Primary database location is missing in prepareDatabase call'
+
+        legacyConfigured = first.legacyLocation isnt undefined and first.legacyLocation isnt null
+        backupConfigured = first.backupLocation isnt undefined and first.backupLocation isnt null
+
+        if !legacyConfigured and first.legacyName isnt undefined
+          throw newSQLError 'legacyLocation is required when legacyName is set in prepareDatabase call'
+
+        if !backupConfigured and first.backupName isnt undefined
+          throw newSQLError 'backupLocation is required when backupName is set in prepareDatabase call'
+
+        if !legacyConfigured and first.migrateLegacyIfNeeded is true
+          throw newSQLError 'legacyLocation is required when migrateLegacyIfNeeded is true in prepareDatabase call'
+
+        if !backupConfigured and (first.backupIfExists is true or first.restoreIfMissing is true)
+          throw newSQLError 'backupLocation and backupName are required when backup or restore is enabled in prepareDatabase call'
+
+        if backupConfigured and (!first.backupName or typeof first.backupName isnt 'string')
+          throw newSQLError 'Valid backupName string is required when backupLocation is set in prepareDatabase call'
+
+        if legacyConfigured and first.legacyName isnt undefined and typeof first.legacyName isnt 'string'
+          throw newSQLError 'legacyName must be a string in prepareDatabase call'
+
+        args =
+          primaryName: first.name
+          primaryDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.primaryLocation}, 'prepareDatabase'
+          primaryAppGroup: first.primaryAppGroup or first.iosDatabaseLocationAppGroup
+          migrateLegacyIfNeeded: legacyConfigured and first.migrateLegacyIfNeeded isnt false
+          backupIfExists: backupConfigured and first.backupIfExists isnt false
+          restoreIfMissing: backupConfigured and first.restoreIfMissing isnt false
+
+        validateAppGroupLocation args.primaryDblocation, args.primaryAppGroup, 'prepareDatabase', 'primaryAppGroup'
+
+        if legacyConfigured
+          args.legacyName = first.legacyName or first.name
+          args.legacyDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.legacyLocation}, 'prepareDatabase'
+          args.legacyAppGroup = first.legacyAppGroup
+          validateAppGroupLocation args.legacyDblocation, args.legacyAppGroup, 'prepareDatabase', 'legacyAppGroup'
+
+          if databaseLocationsMatch args.primaryName, args.primaryDblocation, args.primaryAppGroup, args.legacyName, args.legacyDblocation, args.legacyAppGroup
+            throw newSQLError 'Primary and legacy database paths must be different in prepareDatabase call'
+
+        if backupConfigured
+          args.backupName = first.backupName
+          args.backupDblocation = resolveIOSDatabaseLocation {iosDatabaseLocation: first.backupLocation}, 'prepareDatabase'
+          args.backupAppGroup = first.backupAppGroup
+          validateAppGroupLocation args.backupDblocation, args.backupAppGroup, 'prepareDatabase', 'backupAppGroup'
+
+          if databaseLocationsMatch args.primaryName, args.primaryDblocation, args.primaryAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup
+            throw newSQLError 'Primary and backup database paths must be different in prepareDatabase call'
+
+          if legacyConfigured and databaseLocationsMatch args.legacyName, args.legacyDblocation, args.legacyAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup
+            throw newSQLError 'Legacy and backup database paths must be different in prepareDatabase call'
+
+        if typeof success is 'function' or typeof error is 'function'
+          return cordova.exec success, error, "SQLitePlugin", "prepareDatabase", [ args ]
+
+        new Promise (resolve, reject) ->
+          cordova.exec resolve, reject, "SQLitePlugin", "prepareDatabase", [ args ]
 
 ## Self test:
 
@@ -1072,6 +1146,7 @@
       openDatabase: SQLiteFactory.openDatabase
       deleteDatabase: SQLiteFactory.deleteDatabase
       copyDatabase: SQLiteFactory.copyDatabase
+      prepareDatabase: SQLiteFactory.prepareDatabase
 
 ## vim directives
 

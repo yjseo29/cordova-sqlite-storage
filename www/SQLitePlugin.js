@@ -1,5 +1,5 @@
 (function() {
-  var DB_STATE_INIT, DB_STATE_OPEN, READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, SelfTest, argsArray, dblocations, iosLocationMap, newSQLError, nextTick, resolveIOSDatabaseLocation, root, txLocks, validateAppGroupLocation;
+  var DB_STATE_INIT, DB_STATE_OPEN, READ_ONLY_REGEX, SQLiteFactory, SQLitePlugin, SQLitePluginTransaction, SelfTest, argsArray, databaseLocationsMatch, dblocations, iosLocationMap, newSQLError, nextTick, resolveIOSDatabaseLocation, root, txLocks, validateAppGroupLocation;
 
   root = this;
 
@@ -552,22 +552,26 @@
   resolveIOSDatabaseLocation = function(options, callName) {
     var dblocation;
     if (!options.iosDatabaseLocation && !options.location && options.location !== 0) {
-      throw newSQLError('Database location or iosDatabaseLocation setting is now mandatory in ' + callName + ' call.');
+      throw newSQLError("Database location or iosDatabaseLocation setting is now mandatory in " + callName + " call.");
     }
     if (!!options.location && !!options.iosDatabaseLocation) {
-      throw newSQLError('AMBIGUOUS: both location and iosDatabaseLocation settings are present in ' + callName + ' call. Please use either setting, not both.');
+      throw newSQLError("AMBIGUOUS: both location and iosDatabaseLocation settings are present in " + callName + " call. Please use either setting, not both.");
     }
     dblocation = !!options.location && options.location === 'default' ? iosLocationMap['default'] : !!options.iosDatabaseLocation ? iosLocationMap[options.iosDatabaseLocation] : dblocations[options.location];
     if (!dblocation) {
-      throw newSQLError('Valid iOS database location could not be determined in ' + callName + ' call');
+      throw newSQLError("Valid iOS database location could not be determined in " + callName + " call");
     }
     return dblocation;
   };
 
   validateAppGroupLocation = function(dblocation, appGroup, callName, optionName) {
     if (dblocation === 'appgroup' && typeof appGroup !== 'string') {
-      throw newSQLError('Valid ' + optionName + ' string setting is required when using iosDatabaseLocation: "AppGroup" in ' + callName + ' call');
+      throw newSQLError("Valid " + optionName + " string setting is required when using iosDatabaseLocation: \"AppGroup\" in " + callName + " call");
     }
+  };
+
+  databaseLocationsMatch = function(firstName, firstLocation, firstAppGroup, secondName, secondLocation, secondAppGroup) {
+    return firstName === secondName && firstLocation === secondLocation && (firstLocation !== 'appgroup' || firstAppGroup === secondAppGroup);
   };
 
   SQLiteFactory = {
@@ -644,7 +648,7 @@
       return cordova.exec(success, error, "SQLitePlugin", "delete", [args]);
     },
     copyDatabase: function(first, success, error) {
-      var args, promise, reject, resolve;
+      var args;
       if (cordova.platformId !== 'ios') {
         if (typeof success === 'function') {
           return nextTick(function() {
@@ -686,12 +690,95 @@
       if (typeof success === 'function' || typeof error === 'function') {
         return cordova.exec(success, error, "SQLitePlugin", "copyDatabase", [args]);
       }
-      promise = new Promise(function(ok, fail) {
-        resolve = ok;
-        reject = fail;
+      return new Promise(function(resolve, reject) {
+        return cordova.exec(resolve, reject, "SQLitePlugin", "copyDatabase", [args]);
       });
-      cordova.exec(resolve, reject, "SQLitePlugin", "copyDatabase", [args]);
-      return promise;
+    },
+    prepareDatabase: function(first, success, error) {
+      var args, backupConfigured, legacyConfigured, result;
+      if (cordova.platformId !== 'ios') {
+        result = {
+          action: 'skipped',
+          platform: cordova.platformId
+        };
+        if (typeof success === 'function') {
+          return nextTick(function() {
+            return success(result);
+          });
+        }
+        return Promise.resolve(result);
+      }
+      if (!first || first.constructor !== Object) {
+        throw newSQLError('Sorry first prepareDatabase argument must be an object');
+      }
+      if (!first.name || typeof first.name !== 'string') {
+        throw newSQLError('Valid database name string is required in prepareDatabase call');
+      }
+      if (!first.primaryLocation) {
+        throw newSQLError('Primary database location is missing in prepareDatabase call');
+      }
+      legacyConfigured = first.legacyLocation !== void 0 && first.legacyLocation !== null;
+      backupConfigured = first.backupLocation !== void 0 && first.backupLocation !== null;
+      if (!legacyConfigured && first.legacyName !== void 0) {
+        throw newSQLError('legacyLocation is required when legacyName is set in prepareDatabase call');
+      }
+      if (!backupConfigured && first.backupName !== void 0) {
+        throw newSQLError('backupLocation is required when backupName is set in prepareDatabase call');
+      }
+      if (!legacyConfigured && first.migrateLegacyIfNeeded === true) {
+        throw newSQLError('legacyLocation is required when migrateLegacyIfNeeded is true in prepareDatabase call');
+      }
+      if (!backupConfigured && (first.backupIfExists === true || first.restoreIfMissing === true)) {
+        throw newSQLError('backupLocation and backupName are required when backup or restore is enabled in prepareDatabase call');
+      }
+      if (backupConfigured && (!first.backupName || typeof first.backupName !== 'string')) {
+        throw newSQLError('Valid backupName string is required when backupLocation is set in prepareDatabase call');
+      }
+      if (legacyConfigured && first.legacyName !== void 0 && typeof first.legacyName !== 'string') {
+        throw newSQLError('legacyName must be a string in prepareDatabase call');
+      }
+      args = {
+        primaryName: first.name,
+        primaryDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.primaryLocation
+        }, 'prepareDatabase'),
+        primaryAppGroup: first.primaryAppGroup || first.iosDatabaseLocationAppGroup,
+        migrateLegacyIfNeeded: legacyConfigured && first.migrateLegacyIfNeeded !== false,
+        backupIfExists: backupConfigured && first.backupIfExists !== false,
+        restoreIfMissing: backupConfigured && first.restoreIfMissing !== false
+      };
+      validateAppGroupLocation(args.primaryDblocation, args.primaryAppGroup, 'prepareDatabase', 'primaryAppGroup');
+      if (legacyConfigured) {
+        args.legacyName = first.legacyName || first.name;
+        args.legacyDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.legacyLocation
+        }, 'prepareDatabase');
+        args.legacyAppGroup = first.legacyAppGroup;
+        validateAppGroupLocation(args.legacyDblocation, args.legacyAppGroup, 'prepareDatabase', 'legacyAppGroup');
+        if (databaseLocationsMatch(args.primaryName, args.primaryDblocation, args.primaryAppGroup, args.legacyName, args.legacyDblocation, args.legacyAppGroup)) {
+          throw newSQLError('Primary and legacy database paths must be different in prepareDatabase call');
+        }
+      }
+      if (backupConfigured) {
+        args.backupName = first.backupName;
+        args.backupDblocation = resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.backupLocation
+        }, 'prepareDatabase');
+        args.backupAppGroup = first.backupAppGroup;
+        validateAppGroupLocation(args.backupDblocation, args.backupAppGroup, 'prepareDatabase', 'backupAppGroup');
+        if (databaseLocationsMatch(args.primaryName, args.primaryDblocation, args.primaryAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup)) {
+          throw newSQLError('Primary and backup database paths must be different in prepareDatabase call');
+        }
+        if (legacyConfigured && databaseLocationsMatch(args.legacyName, args.legacyDblocation, args.legacyAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup)) {
+          throw newSQLError('Legacy and backup database paths must be different in prepareDatabase call');
+        }
+      }
+      if (typeof success === 'function' || typeof error === 'function') {
+        return cordova.exec(success, error, "SQLitePlugin", "prepareDatabase", [args]);
+      }
+      return new Promise(function(resolve, reject) {
+        return cordova.exec(resolve, reject, "SQLitePlugin", "prepareDatabase", [args]);
+      });
     }
   };
 
@@ -968,7 +1055,8 @@
     selfTest: SelfTest.start,
     openDatabase: SQLiteFactory.openDatabase,
     deleteDatabase: SQLiteFactory.deleteDatabase,
-    copyDatabase: SQLiteFactory.copyDatabase
+    copyDatabase: SQLiteFactory.copyDatabase,
+    prepareDatabase: SQLiteFactory.prepareDatabase
   };
 
 }).call(this);
