@@ -1526,6 +1526,92 @@ var mytests = function() {
           });
         }, MYTIMEOUT);
 
+        it(suiteName + 'sqlitePlugin.restoreDatabase with no sourceName setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.restoreDatabase({
+              sourceLocation: 'Documents',
+              name: 'my.db',
+              destinationLocation: 'Documents'
+            });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.restoreDatabase with matching source and destination paths (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.restoreDatabase({
+              sourceName: 'my.db',
+              sourceLocation: 'Documents',
+              name: 'my.db',
+              destinationLocation: 'Documents'
+            });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.restoreDatabase safely replaces a Documents database', function(done) {
+          if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
+
+          var sourceName = 'restore-source.db';
+          var destinationName = 'restore-destination.db';
+          var remove = function(name, next) {
+            window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: 'Documents' }, next, next);
+          };
+          var cleanup = function() {
+            remove(sourceName, function() {
+              remove(destinationName, done);
+            });
+          };
+
+          remove(sourceName, function() {
+            remove(destinationName, function() {
+              var sourceDb = window.sqlitePlugin.openDatabase({ name: sourceName, iosDatabaseLocation: 'Documents' }, function() {
+                sourceDb.executeSql('CREATE TABLE restore_test (value TEXT)', [], function() {
+                  sourceDb.executeSql('INSERT INTO restore_test VALUES (?)', ['from-source'], function() {
+                    sourceDb.close(function() {
+                      var destinationDb = window.sqlitePlugin.openDatabase({ name: destinationName, iosDatabaseLocation: 'Documents' }, function() {
+                        destinationDb.close(function() {
+                          window.sqlitePlugin.restoreDatabase({
+                            sourceName: sourceName,
+                            sourceLocation: 'Documents',
+                            name: destinationName,
+                            destinationLocation: 'Documents',
+                            deleteSource: true
+                          }, function(result) {
+                            expect(result.action).toBe('restored');
+                            expect(result.destinationExisted).toBe(true);
+                            expect(result.destinationExists).toBe(true);
+                            expect(result.sourceDeleted).toBe(true);
+
+                            var restoredDb = window.sqlitePlugin.openDatabase({ name: destinationName, iosDatabaseLocation: 'Documents' }, function() {
+                              restoredDb.executeSql('SELECT value FROM restore_test', [], function(queryResult) {
+                                expect(queryResult.rows.item(0).value).toBe('from-source');
+                                restoredDb.close(cleanup, done.fail);
+                              }, done.fail);
+                            }, done.fail);
+                          }, done.fail);
+                        }, done.fail);
+                      }, done.fail);
+                    }, done.fail);
+                  }, done.fail);
+                }, done.fail);
+              }, done.fail);
+            });
+          });
+        }, MYTIMEOUT);
+
       }
 
     }

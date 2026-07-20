@@ -1030,6 +1030,80 @@ On non-iOS platforms, `prepareDatabase()` is a no-op that resolves with `{ actio
 - An error resolving an App Group, opening SQLite, validating the snapshot, or replacing a destination rejects the Promise. Do not continue to `openDatabase()` in the error path without deciding how the app should handle recovery.
 - Primary, legacy, and backup must resolve to three different paths when all three are configured.
 
+### Restore a downloaded iOS database safely
+
+Use `restoreDatabase()` after downloading a database to a temporary file. Unlike `copyDatabase()`, this method validates the source, creates a consistent SQLite snapshot, validates the snapshot, and only then replaces the destination database.
+
+An app that keeps its primary database in `Documents` can restore without using an App Group:
+
+```js
+await new Promise(function(resolve, reject) {
+  window.db.close(resolve, reject);
+});
+
+var restored = await window.sqlitePlugin.restoreDatabase({
+  sourceName: 'downloaded.db',
+  sourceLocation: 'Documents',
+
+  name: 'my.db',
+  destinationLocation: 'Documents',
+
+  deleteSource: true
+});
+
+console.log('database restore:', restored);
+```
+
+To restore an App Group primary database:
+
+```js
+await window.sqlitePlugin.restoreDatabase({
+  sourceName: 'downloaded.db',
+  sourceLocation: 'Documents',
+
+  name: 'my.db',
+  destinationLocation: 'AppGroup',
+  destinationAppGroup: 'group.com.example.myapp',
+
+  deleteSource: true
+});
+```
+
+#### Restore options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `sourceName` | yes | none | Downloaded or otherwise prepared source database file name. |
+| `sourceLocation` | yes | none | Source location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `sourceAppGroup` | for App Group source | none | App Group identifier for `sourceLocation: 'AppGroup'`. |
+| `name` | yes | none | Destination primary database file name. |
+| `destinationLocation` | yes | none | Destination location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `destinationAppGroup` | for App Group destination | none | App Group identifier for `destinationLocation: 'AppGroup'`. `iosDatabaseLocationAppGroup` is also accepted as an alias. |
+| `deleteSource` | no | `false` | Delete the source database and SQLite sidecars only after the destination has been restored successfully. |
+
+The resolved value has this shape:
+
+```js
+{
+  action: 'restored',
+  destinationExisted: true,
+  destinationExists: true,
+  sourceDeleted: true
+}
+```
+
+#### Restore behavior and precautions
+
+- The source and destination must resolve to different paths. Download to a dedicated name such as `downloaded.db`; do not download directly over the primary database.
+- The source is opened read-only and checked with `PRAGMA quick_check` before the destination is touched.
+- Restore uses the SQLite Online Backup API to create a temporary standalone snapshot. The snapshot is checked again and then atomically replaces the destination.
+- Close the destination database and await its close callback before calling `restoreDatabase()`. The method rejects when that database is still open through this plugin.
+- The method also rejects when destination `-journal`, `-wal`, or `-shm` files remain. This prevents replacing a database that may still be in use or not fully checkpointed.
+- For an App Group database, the containing app and every extension must coordinate access. Closing the Cordova database does not close a widget's separate SQLite connection. Prevent widget reads and writes during restore, release its connection, restore, and then reload widget timelines.
+- A validation or snapshot failure rejects the Promise before installing the downloaded database. `deleteSource` runs only after a successful restore.
+- If restore succeeds but source deletion fails, the destination remains restored and the Promise rejects with an error explaining that cleanup failed.
+- On non-iOS platforms, the method resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
+
 **WARNING:** Again, the new "default" iosDatabaseLocation value is *NOT* the same as the old default location and would break an upgrade for an app using the old default value (0) on iOS.
 
 DEPRECATED ALTERNATIVE to be removed in an upcoming release:

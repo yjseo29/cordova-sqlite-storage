@@ -140,7 +140,7 @@
 
     if (openResult != SQLITE_OK) {
         if (errorMessage != NULL) {
-            *errorMessage = [NSString stringWithFormat:@"Unable to open prepared database for validation: %s", db != NULL ? sqlite3_errmsg(db) : "unknown SQLite error"];
+            *errorMessage = [NSString stringWithFormat:@"Unable to open database for validation: %s", db != NULL ? sqlite3_errmsg(db) : "unknown SQLite error"];
         }
         if (db != NULL) sqlite3_close(db);
         return NO;
@@ -148,14 +148,17 @@
 
     int prepareResult = sqlite3_prepare_v2(db, "PRAGMA quick_check;", -1, &statement, NULL);
     BOOL valid = NO;
+    NSString *checkMessage = nil;
 
     if (prepareResult == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW) {
         const unsigned char *result = sqlite3_column_text(statement, 0);
-        valid = result != NULL && strcmp((const char *)result, "ok") == 0;
+        if (result != NULL) checkMessage = [NSString stringWithUTF8String:(const char *)result];
+        valid = [checkMessage isEqualToString:@"ok"];
     }
 
     if (!valid && errorMessage != NULL) {
-        *errorMessage = [NSString stringWithFormat:@"Prepared database failed SQLite quick_check: %s", sqlite3_errmsg(db)];
+        NSString *detail = checkMessage != nil ? checkMessage : [NSString stringWithUTF8String:sqlite3_errmsg(db)];
+        *errorMessage = [NSString stringWithFormat:@"Database failed SQLite quick_check: %@", detail];
     }
 
     if (statement != NULL) sqlite3_finalize(statement);
@@ -195,7 +198,7 @@
         NSError *error = nil;
         if (![fileManager removeItemAtPath:itemPath error:&error]) {
             if (errorMessage != NULL) {
-                *errorMessage = [NSString stringWithFormat:@"Unable to delete legacy database file: %@", error];
+                *errorMessage = [NSString stringWithFormat:@"Unable to delete database file: %@", error];
             }
             return NO;
         }
@@ -711,6 +714,101 @@ cleanup:
         @"legacyDeleted": @(legacyDeleted),
         @"backupExists": @(backupExists),
         @"backupUpdated": @(backupUpdated)
+    };
+    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+-(void) restoreDatabase: (CDVInvokedUrlCommand*)command
+{
+    [self.commandDelegate runInBackground:^{
+        [self restoreDatabaseNow: command];
+    }];
+}
+
+-(void)restoreDatabaseNow: (CDVInvokedUrlCommand*)command
+{
+    NSMutableDictionary *options = [command.arguments objectAtIndex:0];
+    NSString *sourceName = [options objectForKey:@"sourceName"];
+    NSString *sourceLocation = [options objectForKey:@"sourceDblocation"];
+    NSString *sourceAppGroup = [options objectForKey:@"sourceAppGroup"];
+    NSString *destinationName = [options objectForKey:@"destinationName"];
+    NSString *destinationLocation = [options objectForKey:@"destinationDblocation"];
+    NSString *destinationAppGroup = [options objectForKey:@"destinationAppGroup"];
+    BOOL deleteSource = [[options objectForKey:@"deleteSource"] boolValue];
+
+    NSString *sourcePath = [self getDBPath:sourceName at:sourceLocation appGroup:sourceAppGroup];
+    NSString *destinationPath = [self getDBPath:destinationName at:destinationLocation appGroup:destinationAppGroup];
+
+    if (sourcePath == NULL || destinationPath == NULL) {
+        CDVPluginResult *pathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: restoreDatabase with no valid database path found"];
+        [self.commandDelegate sendPluginResult:pathError callbackId:command.callbackId];
+        return;
+    }
+
+    if ([sourcePath isEqualToString:destinationPath]) {
+        CDVPluginResult *samePathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Source and destination database paths must be different"];
+        [self.commandDelegate sendPluginResult:samePathError callbackId:command.callbackId];
+        return;
+    }
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:sourcePath]) {
+        CDVPluginResult *missingSourceError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The restore source database does not exist on that path"];
+        [self.commandDelegate sendPluginResult:missingSourceError callbackId:command.callbackId];
+        return;
+    }
+
+    if ([openDBs objectForKey:destinationName] != NULL) {
+        CDVPluginResult *openDestinationError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Close the destination database before calling restoreDatabase"];
+        [self.commandDelegate sendPluginResult:openDestinationError callbackId:command.callbackId];
+        return;
+    }
+
+    if (deleteSource && [openDBs objectForKey:sourceName] != NULL) {
+        CDVPluginResult *openSourceError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Close the restore source database before using deleteSource"];
+        [self.commandDelegate sendPluginResult:openSourceError callbackId:command.callbackId];
+        return;
+    }
+
+    for (NSString *suffix in @[@"-journal", @"-wal", @"-shm"]) {
+        if ([fileManager fileExistsAtPath:[destinationPath stringByAppendingString:suffix]]) {
+            CDVPluginResult *sidecarError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The destination database has active SQLite sidecar files; close all app and extension connections before restoring"];
+            [self.commandDelegate sendPluginResult:sidecarError callbackId:command.callbackId];
+            return;
+        }
+    }
+
+    NSString *errorMessage = nil;
+    if (![self validateDatabaseAtPath:sourcePath errorMessage:&errorMessage]) {
+        CDVPluginResult *validationError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+        [self.commandDelegate sendPluginResult:validationError callbackId:command.callbackId];
+        return;
+    }
+
+    BOOL destinationExisted = [fileManager fileExistsAtPath:destinationPath];
+    if (![self createDatabaseSnapshotFromPath:sourcePath toPath:destinationPath errorMessage:&errorMessage]) {
+        CDVPluginResult *restoreError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+        [self.commandDelegate sendPluginResult:restoreError callbackId:command.callbackId];
+        return;
+    }
+
+    BOOL sourceDeleted = NO;
+    if (deleteSource) {
+        if (![self removeDatabaseAtPath:sourcePath errorMessage:&errorMessage]) {
+            NSString *message = [NSString stringWithFormat:@"Database restored but the source could not be deleted: %@", errorMessage];
+            CDVPluginResult *deleteError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:message];
+            [self.commandDelegate sendPluginResult:deleteError callbackId:command.callbackId];
+            return;
+        }
+        sourceDeleted = YES;
+    }
+
+    NSDictionary *result = @{
+        @"action": @"restored",
+        @"destinationExisted": @(destinationExisted),
+        @"destinationExists": @([fileManager fileExistsAtPath:destinationPath]),
+        @"sourceDeleted": @(sourceDeleted)
     };
     CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];

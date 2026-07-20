@@ -872,6 +872,50 @@
         new Promise (resolve, reject) ->
           cordova.exec resolve, reject, "SQLitePlugin", "prepareDatabase", [ args ]
 
+      restoreDatabase: (first, success, error) ->
+        if cordova.platformId isnt 'ios'
+          result = action: 'skipped', platform: cordova.platformId
+          if typeof success is 'function'
+            return nextTick -> success result
+
+          return Promise.resolve result
+
+        if !first || first.constructor isnt Object
+          throw newSQLError 'Sorry first restoreDatabase argument must be an object'
+
+        if !first.sourceName or typeof first.sourceName isnt 'string'
+          throw newSQLError 'Valid sourceName string is required in restoreDatabase call'
+
+        if !first.sourceLocation
+          throw newSQLError 'sourceLocation is required in restoreDatabase call'
+
+        if !first.name or typeof first.name isnt 'string'
+          throw newSQLError 'Valid destination database name string is required in restoreDatabase call'
+
+        if !first.destinationLocation
+          throw newSQLError 'destinationLocation is required in restoreDatabase call'
+
+        args =
+          sourceName: first.sourceName
+          sourceDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'restoreDatabase'
+          sourceAppGroup: first.sourceAppGroup
+          destinationName: first.name
+          destinationDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.destinationLocation}, 'restoreDatabase'
+          destinationAppGroup: first.destinationAppGroup or first.iosDatabaseLocationAppGroup
+          deleteSource: first.deleteSource is true
+
+        validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup'
+        validateAppGroupLocation args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup'
+
+        if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup
+          throw newSQLError 'Source and destination database paths must be different in restoreDatabase call'
+
+        if typeof success is 'function' or typeof error is 'function'
+          return cordova.exec success, error, "SQLitePlugin", "restoreDatabase", [ args ]
+
+        new Promise (resolve, reject) ->
+          cordova.exec resolve, reject, "SQLitePlugin", "restoreDatabase", [ args ]
+
 ## Self test:
 
     SelfTest =
@@ -1155,6 +1199,7 @@
       deleteDatabase: SQLiteFactory.deleteDatabase
       copyDatabase: SQLiteFactory.copyDatabase
       prepareDatabase: SQLiteFactory.prepareDatabase
+      restoreDatabase: SQLiteFactory.restoreDatabase
 
 ## vim directives
 

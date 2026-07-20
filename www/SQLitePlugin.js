@@ -786,6 +786,60 @@
       return new Promise(function(resolve, reject) {
         return cordova.exec(resolve, reject, "SQLitePlugin", "prepareDatabase", [args]);
       });
+    },
+    restoreDatabase: function(first, success, error) {
+      var args, result;
+      if (cordova.platformId !== 'ios') {
+        result = {
+          action: 'skipped',
+          platform: cordova.platformId
+        };
+        if (typeof success === 'function') {
+          return nextTick(function() {
+            return success(result);
+          });
+        }
+        return Promise.resolve(result);
+      }
+      if (!first || first.constructor !== Object) {
+        throw newSQLError('Sorry first restoreDatabase argument must be an object');
+      }
+      if (!first.sourceName || typeof first.sourceName !== 'string') {
+        throw newSQLError('Valid sourceName string is required in restoreDatabase call');
+      }
+      if (!first.sourceLocation) {
+        throw newSQLError('sourceLocation is required in restoreDatabase call');
+      }
+      if (!first.name || typeof first.name !== 'string') {
+        throw newSQLError('Valid destination database name string is required in restoreDatabase call');
+      }
+      if (!first.destinationLocation) {
+        throw newSQLError('destinationLocation is required in restoreDatabase call');
+      }
+      args = {
+        sourceName: first.sourceName,
+        sourceDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.sourceLocation
+        }, 'restoreDatabase'),
+        sourceAppGroup: first.sourceAppGroup,
+        destinationName: first.name,
+        destinationDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.destinationLocation
+        }, 'restoreDatabase'),
+        destinationAppGroup: first.destinationAppGroup || first.iosDatabaseLocationAppGroup,
+        deleteSource: first.deleteSource === true
+      };
+      validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'restoreDatabase', 'sourceAppGroup');
+      validateAppGroupLocation(args.destinationDblocation, args.destinationAppGroup, 'restoreDatabase', 'destinationAppGroup');
+      if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.destinationName, args.destinationDblocation, args.destinationAppGroup)) {
+        throw newSQLError('Source and destination database paths must be different in restoreDatabase call');
+      }
+      if (typeof success === 'function' || typeof error === 'function') {
+        return cordova.exec(success, error, "SQLitePlugin", "restoreDatabase", [args]);
+      }
+      return new Promise(function(resolve, reject) {
+        return cordova.exec(resolve, reject, "SQLitePlugin", "restoreDatabase", [args]);
+      });
     }
   };
 
@@ -1063,7 +1117,8 @@
     openDatabase: SQLiteFactory.openDatabase,
     deleteDatabase: SQLiteFactory.deleteDatabase,
     copyDatabase: SQLiteFactory.copyDatabase,
-    prepareDatabase: SQLiteFactory.prepareDatabase
+    prepareDatabase: SQLiteFactory.prepareDatabase,
+    restoreDatabase: SQLiteFactory.restoreDatabase
   };
 
 }).call(this);
