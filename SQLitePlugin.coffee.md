@@ -818,8 +818,15 @@
         if !legacyConfigured and first.migrateLegacyIfNeeded is true
           throw newSQLError 'legacyLocation is required when migrateLegacyIfNeeded is true in prepareDatabase call'
 
+        if first.deleteLegacyAfterMigration is true and !legacyConfigured
+          throw newSQLError 'legacyLocation is required when deleteLegacyAfterMigration is true in prepareDatabase call'
+
         if !backupConfigured and (first.backupIfExists is true or first.restoreIfMissing is true)
           throw newSQLError 'backupLocation and backupName are required when backup or restore is enabled in prepareDatabase call'
+
+        if first.deleteLegacyAfterMigration is true and
+            (!backupConfigured or first.backupIfExists is false)
+          throw newSQLError 'Enabled backupLocation and backupIfExists are required when deleteLegacyAfterMigration is true in prepareDatabase call'
 
         if backupConfigured and (!first.backupName or typeof first.backupName isnt 'string')
           throw newSQLError 'Valid backupName string is required when backupLocation is set in prepareDatabase call'
@@ -834,6 +841,7 @@
           migrateLegacyIfNeeded: legacyConfigured and first.migrateLegacyIfNeeded isnt false
           backupIfExists: backupConfigured and first.backupIfExists isnt false
           restoreIfMissing: backupConfigured and first.restoreIfMissing isnt false
+          deleteLegacyAfterMigration: first.deleteLegacyAfterMigration is true
 
         validateAppGroupLocation args.primaryDblocation, args.primaryAppGroup, 'prepareDatabase', 'primaryAppGroup'
 

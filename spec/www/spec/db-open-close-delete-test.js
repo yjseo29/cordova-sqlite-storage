@@ -1417,6 +1417,24 @@ var mytests = function() {
           }
         }, MYTIMEOUT);
 
+        it(suiteName + 'sqlitePlugin.prepareDatabase with legacy deletion but no backup (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.prepareDatabase({
+              name: 'my.db',
+              primaryLocation: 'Documents',
+              legacyLocation: 'Library',
+              deleteLegacyAfterMigration: true
+            });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
         it(suiteName + 'sqlitePlugin.prepareDatabase creates no file when primary, backup, and legacy are missing', function(done) {
           if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
 
@@ -1481,10 +1499,12 @@ var mytests = function() {
                           legacyLocation: 'Library',
                           legacyName: legacyName,
                           backupLocation: 'Documents',
-                          backupName: backupName
+                          backupName: backupName,
+                          deleteLegacyAfterMigration: true
                         }, function(result) {
                           expect(result.action).toBe('restored');
                           expect(result.primaryExists).toBe(true);
+                          expect(result.legacyDeleted).toBe(true);
                           cleanup();
                         }, function() {
                           done.fail();

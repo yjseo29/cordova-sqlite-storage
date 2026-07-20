@@ -4,7 +4,7 @@
 
 - Add iOS App Group database location support using `iosDatabaseLocation: 'AppGroup'` and `iosDatabaseLocationAppGroup`.
 - Add iOS database file copy/migration support with `sqlitePlugin.copyDatabase()`.
-- Add idempotent iOS migration, SQLite snapshot backup, and missing-primary restore support with `sqlitePlugin.prepareDatabase()`, preferring backup restore over legacy migration.
+- Add idempotent iOS migration, SQLite snapshot backup, missing-primary restore, and optional post-backup legacy cleanup with `sqlitePlugin.prepareDatabase()`, preferring backup restore over legacy migration.
 
 #### cordova-sqlite-storage 7.0.0
 

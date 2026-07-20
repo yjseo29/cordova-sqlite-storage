@@ -728,8 +728,14 @@
       if (!legacyConfigured && first.migrateLegacyIfNeeded === true) {
         throw newSQLError('legacyLocation is required when migrateLegacyIfNeeded is true in prepareDatabase call');
       }
+      if (first.deleteLegacyAfterMigration === true && !legacyConfigured) {
+        throw newSQLError('legacyLocation is required when deleteLegacyAfterMigration is true in prepareDatabase call');
+      }
       if (!backupConfigured && (first.backupIfExists === true || first.restoreIfMissing === true)) {
         throw newSQLError('backupLocation and backupName are required when backup or restore is enabled in prepareDatabase call');
+      }
+      if (first.deleteLegacyAfterMigration === true && (!backupConfigured || first.backupIfExists === false)) {
+        throw newSQLError('Enabled backupLocation and backupIfExists are required when deleteLegacyAfterMigration is true in prepareDatabase call');
       }
       if (backupConfigured && (!first.backupName || typeof first.backupName !== 'string')) {
         throw newSQLError('Valid backupName string is required when backupLocation is set in prepareDatabase call');
@@ -745,7 +751,8 @@
         primaryAppGroup: first.primaryAppGroup || first.iosDatabaseLocationAppGroup,
         migrateLegacyIfNeeded: legacyConfigured && first.migrateLegacyIfNeeded !== false,
         backupIfExists: backupConfigured && first.backupIfExists !== false,
-        restoreIfMissing: backupConfigured && first.restoreIfMissing !== false
+        restoreIfMissing: backupConfigured && first.restoreIfMissing !== false,
+        deleteLegacyAfterMigration: first.deleteLegacyAfterMigration === true
       };
       validateAppGroupLocation(args.primaryDblocation, args.primaryAppGroup, 'prepareDatabase', 'primaryAppGroup');
       if (legacyConfigured) {

@@ -183,6 +183,27 @@
     return YES;
 }
 
+-(BOOL) removeDatabaseAtPath:(NSString *)dbPath errorMessage:(NSString **)errorMessage
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    // Keep the main file until last so a partial cleanup can be retried.
+    for (NSString *suffix in @[@"-journal", @"-wal", @"-shm", @""]) {
+        NSString *itemPath = [dbPath stringByAppendingString:suffix];
+        if (![fileManager fileExistsAtPath:itemPath]) continue;
+
+        NSError *error = nil;
+        if (![fileManager removeItemAtPath:itemPath error:&error]) {
+            if (errorMessage != NULL) {
+                *errorMessage = [NSString stringWithFormat:@"Unable to delete legacy database file: %@", error];
+            }
+            return NO;
+        }
+    }
+
+    return YES;
+}
+
 -(BOOL) createDatabaseSnapshotFromPath:(NSString *)sourcePath toPath:(NSString *)destinationPath errorMessage:(NSString **)errorMessage
 {
     NSFileManager *fileManager = [NSFileManager defaultManager];
@@ -602,6 +623,7 @@ cleanup:
     BOOL migrateLegacyIfNeeded = [[options objectForKey:@"migrateLegacyIfNeeded"] boolValue];
     BOOL backupIfExists = [[options objectForKey:@"backupIfExists"] boolValue];
     BOOL restoreIfMissing = [[options objectForKey:@"restoreIfMissing"] boolValue];
+    BOOL deleteLegacyAfterMigration = [[options objectForKey:@"deleteLegacyAfterMigration"] boolValue];
 
     NSString *primaryPath = [self getDBPath:primaryName at:primaryLocation appGroup:primaryAppGroup];
     NSString *legacyPath = legacyLocation != NULL ? [self getDBPath:legacyName at:legacyLocation appGroup:legacyAppGroup] : NULL;
@@ -621,11 +643,18 @@ cleanup:
         return;
     }
 
+    if (deleteLegacyAfterMigration && (legacyPath == NULL || backupPath == NULL || !backupIfExists)) {
+        CDVPluginResult *deleteOptionsError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Enabled legacy and backup paths are required to delete the legacy database"];
+        [self.commandDelegate sendPluginResult:deleteOptionsError callbackId:command.callbackId];
+        return;
+    }
+
     NSFileManager *fileManager = [NSFileManager defaultManager];
     BOOL primaryExisted = [fileManager fileExistsAtPath:primaryPath];
     BOOL legacyExists = legacyPath != NULL && [fileManager fileExistsAtPath:legacyPath];
     BOOL backupExists = backupPath != NULL && [fileManager fileExistsAtPath:backupPath];
     BOOL backupUpdated = NO;
+    BOOL legacyDeleted = NO;
     NSString *action = @"new";
     NSString *errorMessage = nil;
 
@@ -658,11 +687,28 @@ cleanup:
         if ([action isEqualToString:@"ready"]) action = @"backed-up";
     }
 
+    BOOL backupNowExists = backupPath != NULL && [fileManager fileExistsAtPath:backupPath];
+    if (deleteLegacyAfterMigration && primaryNowExists && legacyExists && !backupNowExists) {
+        CDVPluginResult *missingBackupError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Legacy database was not deleted because the prepared backup is missing"];
+        [self.commandDelegate sendPluginResult:missingBackupError callbackId:command.callbackId];
+        return;
+    }
+
+    if (deleteLegacyAfterMigration && primaryNowExists && legacyExists) {
+        if (![self removeDatabaseAtPath:legacyPath errorMessage:&errorMessage]) {
+            CDVPluginResult *legacyDeleteError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+            [self.commandDelegate sendPluginResult:legacyDeleteError callbackId:command.callbackId];
+            return;
+        }
+        legacyDeleted = YES;
+    }
+
     NSDictionary *result = @{
         @"action": action,
         @"primaryExisted": @(primaryExisted),
         @"primaryExists": @(primaryNowExists),
         @"legacyExists": @(legacyExists),
+        @"legacyDeleted": @(legacyDeleted),
         @"backupExists": @(backupExists),
         @"backupUpdated": @(backupUpdated)
     };

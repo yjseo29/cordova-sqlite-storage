@@ -935,7 +935,8 @@ async function openPreparedDatabase() {
 
     migrateLegacyIfNeeded: true,
     backupIfExists: true,
-    restoreIfMissing: true
+    restoreIfMissing: true,
+    deleteLegacyAfterMigration: true
   });
 
   console.log('database preparation:', preparation);
@@ -952,7 +953,7 @@ openPreparedDatabase().catch(function(error) {
 });
 ```
 
-The three Boolean options in this example may be omitted. They default to `true` when their corresponding legacy or backup location is configured.
+`migrateLegacyIfNeeded`, `backupIfExists`, and `restoreIfMissing` may be omitted. They default to `true` when their corresponding legacy or backup location is configured. `deleteLegacyAfterMigration` defaults to `false` and must be explicitly enabled.
 
 #### Options
 
@@ -965,6 +966,7 @@ The three Boolean options in this example may be omitted. They default to `true`
 | `legacyName` | no | `name` | Previous database file name. Requires `legacyLocation`. |
 | `legacyAppGroup` | for App Group legacy | none | App Group identifier for `legacyLocation: 'AppGroup'`. |
 | `migrateLegacyIfNeeded` | no | `true` when `legacyLocation` is set | Use the legacy database only when the primary database is missing and no enabled backup restore is available. |
+| `deleteLegacyAfterMigration` | no | `false` | Delete the legacy database and its SQLite sidecars only after the primary and enabled backup are ready. Requires `legacyLocation`, `backupLocation`, and `backupIfExists` not set to `false`. |
 | `backupLocation` | no | none | Backup location. Omit it to disable both backup creation and automatic restore. |
 | `backupName` | when `backupLocation` is set | none | Dedicated backup file name. It must not resolve to the primary or legacy path. |
 | `backupAppGroup` | for App Group backup | none | App Group identifier for `backupLocation: 'AppGroup'`. |
@@ -989,10 +991,10 @@ The primary database is authoritative. `prepareDatabase()` checks files in this 
 
 | Files and options at method start | Result |
 | --- | --- |
-| Primary exists; backup is enabled | Legacy and restore are ignored. A consistent primary snapshot replaces the dedicated backup. `action` is `backed-up`. |
+| Primary exists; backup is enabled | Restore and migration are ignored. A consistent primary snapshot replaces the dedicated backup. If `deleteLegacyAfterMigration` is `true`, a remaining legacy database is then deleted. `action` is `backed-up`. |
 | Primary exists; backup is disabled | No files are changed. `action` is `ready`. |
 | Primary missing; enabled backup exists | Backup is restored to primary, even if the legacy database also exists. The same backup is not immediately rewritten. `action` is `restored`. |
-| Primary missing; enabled backup is absent; enabled legacy exists | Legacy is snapshotted to primary. If backup creation is enabled, the new primary is then snapshotted to backup. `action` is `migrated`. |
+| Primary missing; enabled backup is absent; enabled legacy exists | Legacy is snapshotted to primary, the new primary is snapshotted to backup, and only then is legacy deleted when `deleteLegacyAfterMigration` is `true`. `action` is `migrated`. |
 | Primary missing; backup restore disabled; enabled legacy exists | Backup is ignored and legacy is snapshotted to primary. `action` is `migrated`. |
 | Primary, usable backup, and usable legacy are all missing | This method creates nothing and returns `action: 'new'`. The following `openDatabase()` call is responsible for creating the new primary database. |
 
@@ -1004,6 +1006,7 @@ The resolved value is an object with these fields:
   primaryExisted: false,
   primaryExists: true,
   legacyExists: true,
+  legacyDeleted: true,
   backupExists: false, // existence when preparation started
   backupUpdated: true
 }
@@ -1017,7 +1020,9 @@ On non-iOS platforms, `prepareDatabase()` is a no-op that resolves with `{ actio
 - Migration and restore never overwrite an existing primary database. File existence, rather than a separate preference flag, determines whether migration or restore is needed.
 - When the primary database is missing, an enabled backup restore has priority over legacy migration. The legacy database is used only when the backup is absent or restore is disabled.
 - If a backup exists but cannot be restored or fails validation, the Promise rejects instead of silently falling back to an older legacy database.
-- The legacy database is retained after migration. Use a different `backupName`; the legacy source and the regularly refreshed backup cannot be the same path.
+- The legacy database is retained by default. Set `deleteLegacyAfterMigration: true` to remove it only after primary preparation and backup validation succeed. If backup creation fails, legacy is not deleted.
+- When legacy deletion is enabled, a leftover legacy file is also cleaned up after a later successful primary backup or restore. This makes deletion retryable after an interrupted preparation.
+- Use a different `backupName`; the legacy source and the regularly refreshed backup cannot be the same path.
 - The backup file is a recovery copy, not a second live database. Do not open it from the app or widget. Both should use the App Group primary database when both can write.
 - Snapshots use the SQLite Online Backup API, include committed WAL data, run `PRAGMA quick_check`, and replace the destination through a temporary file. This avoids the inconsistent copies that can result from copying only a live `.db` file.
 - A startup backup contains data committed before that startup. Changes made during the current session are included when preparation runs on the next startup.
