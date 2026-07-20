@@ -1030,6 +1030,66 @@ On non-iOS platforms, `prepareDatabase()` is a no-op that resolves with `{ actio
 - An error resolving an App Group, opening SQLite, validating the snapshot, or replacing a destination rejects the Promise. Do not continue to `openDatabase()` in the error path without deciding how the app should handle recovery.
 - Primary, legacy, and backup must resolve to three different paths when all three are configured.
 
+### Create an uploadable iOS database backup
+
+Use `backupDatabase()` when only a fresh backup file is needed, for example immediately before uploading a database to cloud storage. `prepareDatabase()` keeps its migration and optional backup behavior, and both methods share the same native SQLite snapshot implementation.
+
+The source database may remain open, but wait for all application write transactions to finish before starting the backup:
+
+```js
+var backup = await window.sqlitePlugin.backupDatabase({
+  name: 'my.db',
+  sourceLocation: 'AppGroup',
+  sourceAppGroup: 'group.com.example.myapp',
+
+  backupName: 'my.backup.db',
+  backupLocation: 'Documents'
+});
+
+console.log('database backup:', backup);
+// Upload Documents/my.backup.db only after this Promise resolves.
+```
+
+An app that does not use an App Group can keep both files in `Documents` as long as their names differ:
+
+```js
+await window.sqlitePlugin.backupDatabase({
+  name: 'my.db',
+  sourceLocation: 'Documents',
+  backupName: 'my.backup.db',
+  backupLocation: 'Documents'
+});
+```
+
+#### Backup options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `name` | yes | none | Source primary database file name. |
+| `sourceLocation` | yes | none | Source location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `sourceAppGroup` | for App Group source | none | App Group identifier for `sourceLocation: 'AppGroup'`. `iosDatabaseLocationAppGroup` is also accepted as an alias. |
+| `backupName` | yes | none | Dedicated backup file name. It must resolve to a different path from the source. |
+| `backupLocation` | yes | none | Backup location: `default`, `Library`, `Documents`, or `AppGroup`. |
+| `backupAppGroup` | for App Group backup | none | App Group identifier for `backupLocation: 'AppGroup'`. |
+
+The resolved value has this shape:
+
+```js
+{
+  action: 'backed-up',
+  sourceExists: true,
+  backupExisted: true, // existence when backup started
+  backupExists: true,
+  backupUpdated: true
+}
+```
+
+`backupDatabase()` always refreshes an existing backup. It does not need an `overwrite` option and never deletes the source. The method rejects instead of returning an empty result when the source is missing.
+
+The backup uses the SQLite Online Backup API, includes committed WAL data, validates the temporary snapshot with `PRAGMA quick_check`, and atomically replaces the backup file. Do not open the dedicated backup from the app or an extension. The method rejects if the backup is open through this plugin or has SQLite sidecar files indicating that it may still be in use.
+
+On non-iOS platforms, `backupDatabase()` resolves with `{ action: 'skipped', platform: cordova.platformId }` and changes no files.
+
 ### Restore a downloaded iOS database safely
 
 Use `restoreDatabase()` after downloading a database to a temporary file. Unlike `copyDatabase()`, this method validates the source, creates a consistent SQLite snapshot, validates the snapshot, and only then replaces the destination database.

@@ -872,6 +872,49 @@
         new Promise (resolve, reject) ->
           cordova.exec resolve, reject, "SQLitePlugin", "prepareDatabase", [ args ]
 
+      backupDatabase: (first, success, error) ->
+        if cordova.platformId isnt 'ios'
+          result = action: 'skipped', platform: cordova.platformId
+          if typeof success is 'function'
+            return nextTick -> success result
+
+          return Promise.resolve result
+
+        if !first || first.constructor isnt Object
+          throw newSQLError 'Sorry first backupDatabase argument must be an object'
+
+        if !first.name or typeof first.name isnt 'string'
+          throw newSQLError 'Valid source database name string is required in backupDatabase call'
+
+        if !first.sourceLocation
+          throw newSQLError 'sourceLocation is required in backupDatabase call'
+
+        if !first.backupName or typeof first.backupName isnt 'string'
+          throw newSQLError 'Valid backupName string is required in backupDatabase call'
+
+        if !first.backupLocation
+          throw newSQLError 'backupLocation is required in backupDatabase call'
+
+        args =
+          sourceName: first.name
+          sourceDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.sourceLocation}, 'backupDatabase'
+          sourceAppGroup: first.sourceAppGroup or first.iosDatabaseLocationAppGroup
+          backupName: first.backupName
+          backupDblocation: resolveIOSDatabaseLocation {iosDatabaseLocation: first.backupLocation}, 'backupDatabase'
+          backupAppGroup: first.backupAppGroup
+
+        validateAppGroupLocation args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup'
+        validateAppGroupLocation args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup'
+
+        if databaseLocationsMatch args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup
+          throw newSQLError 'Source and backup database paths must be different in backupDatabase call'
+
+        if typeof success is 'function' or typeof error is 'function'
+          return cordova.exec success, error, "SQLitePlugin", "backupDatabase", [ args ]
+
+        new Promise (resolve, reject) ->
+          cordova.exec resolve, reject, "SQLitePlugin", "backupDatabase", [ args ]
+
       restoreDatabase: (first, success, error) ->
         if cordova.platformId isnt 'ios'
           result = action: 'skipped', platform: cordova.platformId
@@ -1199,6 +1242,7 @@
       deleteDatabase: SQLiteFactory.deleteDatabase
       copyDatabase: SQLiteFactory.copyDatabase
       prepareDatabase: SQLiteFactory.prepareDatabase
+      backupDatabase: SQLiteFactory.backupDatabase
       restoreDatabase: SQLiteFactory.restoreDatabase
 
 ## vim directives

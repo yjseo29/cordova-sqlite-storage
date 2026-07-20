@@ -309,6 +309,25 @@ cleanup:
     return success;
 }
 
+-(BOOL) backupDatabaseFromPath:(NSString *)sourcePath toPath:(NSString *)backupPath backupName:(NSString *)backupName errorMessage:(NSString **)errorMessage
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    if ([openDBs objectForKey:backupName] != NULL) {
+        if (errorMessage != NULL) *errorMessage = @"Close the backup database before replacing it";
+        return NO;
+    }
+
+    for (NSString *suffix in @[@"-journal", @"-wal", @"-shm"]) {
+        if ([fileManager fileExistsAtPath:[backupPath stringByAppendingString:suffix]]) {
+            if (errorMessage != NULL) *errorMessage = @"The backup database has active SQLite sidecar files; close all connections to the backup before replacing it";
+            return NO;
+        }
+    }
+
+    return [self createDatabaseSnapshotFromPath:sourcePath toPath:backupPath errorMessage:errorMessage];
+}
+
 -(void)echoStringValue: (CDVInvokedUrlCommand*)command
 {
     CDVPluginResult * pluginResult = nil;
@@ -681,7 +700,7 @@ cleanup:
 
     BOOL primaryNowExists = [fileManager fileExistsAtPath:primaryPath];
     if (backupIfExists && backupPath != NULL && primaryNowExists && ![action isEqualToString:@"restored"]) {
-        if (![self createDatabaseSnapshotFromPath:primaryPath toPath:backupPath errorMessage:&errorMessage]) {
+        if (![self backupDatabaseFromPath:primaryPath toPath:backupPath backupName:backupName errorMessage:&errorMessage]) {
             CDVPluginResult *backupError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
             [self.commandDelegate sendPluginResult:backupError callbackId:command.callbackId];
             return;
@@ -714,6 +733,64 @@ cleanup:
         @"legacyDeleted": @(legacyDeleted),
         @"backupExists": @(backupExists),
         @"backupUpdated": @(backupUpdated)
+    };
+    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+}
+
+-(void) backupDatabase: (CDVInvokedUrlCommand*)command
+{
+    [self.commandDelegate runInBackground:^{
+        [self backupDatabaseNow: command];
+    }];
+}
+
+-(void)backupDatabaseNow: (CDVInvokedUrlCommand*)command
+{
+    NSMutableDictionary *options = [command.arguments objectAtIndex:0];
+    NSString *sourceName = [options objectForKey:@"sourceName"];
+    NSString *sourceLocation = [options objectForKey:@"sourceDblocation"];
+    NSString *sourceAppGroup = [options objectForKey:@"sourceAppGroup"];
+    NSString *backupName = [options objectForKey:@"backupName"];
+    NSString *backupLocation = [options objectForKey:@"backupDblocation"];
+    NSString *backupAppGroup = [options objectForKey:@"backupAppGroup"];
+
+    NSString *sourcePath = [self getDBPath:sourceName at:sourceLocation appGroup:sourceAppGroup];
+    NSString *backupPath = [self getDBPath:backupName at:backupLocation appGroup:backupAppGroup];
+
+    if (sourcePath == NULL || backupPath == NULL) {
+        CDVPluginResult *pathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"INTERNAL PLUGIN ERROR: backupDatabase with no valid database path found"];
+        [self.commandDelegate sendPluginResult:pathError callbackId:command.callbackId];
+        return;
+    }
+
+    if ([sourcePath isEqualToString:backupPath]) {
+        CDVPluginResult *samePathError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Source and backup database paths must be different"];
+        [self.commandDelegate sendPluginResult:samePathError callbackId:command.callbackId];
+        return;
+    }
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:sourcePath]) {
+        CDVPluginResult *missingSourceError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"The backup source database does not exist on that path"];
+        [self.commandDelegate sendPluginResult:missingSourceError callbackId:command.callbackId];
+        return;
+    }
+
+    BOOL backupExisted = [fileManager fileExistsAtPath:backupPath];
+    NSString *errorMessage = nil;
+    if (![self backupDatabaseFromPath:sourcePath toPath:backupPath backupName:backupName errorMessage:&errorMessage]) {
+        CDVPluginResult *backupError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+        [self.commandDelegate sendPluginResult:backupError callbackId:command.callbackId];
+        return;
+    }
+
+    NSDictionary *result = @{
+        @"action": @"backed-up",
+        @"sourceExists": @(YES),
+        @"backupExisted": @(backupExisted),
+        @"backupExists": @([fileManager fileExistsAtPath:backupPath]),
+        @"backupUpdated": @(YES)
     };
     CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:result];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];

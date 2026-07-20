@@ -1526,6 +1526,91 @@ var mytests = function() {
           });
         }, MYTIMEOUT);
 
+        it(suiteName + 'sqlitePlugin.backupDatabase with no name setting (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.backupDatabase({
+              sourceLocation: 'Documents',
+              backupName: 'my.backup.db',
+              backupLocation: 'Documents'
+            });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.backupDatabase with matching source and backup paths (REJECTED with exception)', function(done) {
+          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+
+          try {
+            window.sqlitePlugin.backupDatabase({
+              name: 'my.db',
+              sourceLocation: 'Documents',
+              backupName: 'my.db',
+              backupLocation: 'Documents'
+            });
+            expect(false).toBe(true);
+            done();
+          } catch (e) {
+            expect(e).toBeDefined();
+            done();
+          }
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.backupDatabase creates a readable Documents snapshot', function(done) {
+          if (cordova.platformId !== 'ios') pending('backupDatabase is a no-op on non-iOS platforms');
+
+          var sourceName = 'backup-source.db';
+          var backupName = 'backup-result.db';
+          var remove = function(name, next) {
+            window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: 'Documents' }, next, next);
+          };
+          var cleanup = function(sourceDb, backupDb) {
+            var finish = function() {
+              remove(sourceName, function() {
+                remove(backupName, done);
+              });
+            };
+            backupDb.close(function() {
+              sourceDb.close(finish, done.fail);
+            }, done.fail);
+          };
+
+          remove(sourceName, function() {
+            remove(backupName, function() {
+              var sourceDb = window.sqlitePlugin.openDatabase({ name: sourceName, iosDatabaseLocation: 'Documents' }, function() {
+                sourceDb.executeSql('CREATE TABLE backup_test (value TEXT)', [], function() {
+                  sourceDb.executeSql('INSERT INTO backup_test VALUES (?)', ['from-source'], function() {
+                    window.sqlitePlugin.backupDatabase({
+                      name: sourceName,
+                      sourceLocation: 'Documents',
+                      backupName: backupName,
+                      backupLocation: 'Documents'
+                    }, function(result) {
+                      expect(result.action).toBe('backed-up');
+                      expect(result.sourceExists).toBe(true);
+                      expect(result.backupExisted).toBe(false);
+                      expect(result.backupExists).toBe(true);
+                      expect(result.backupUpdated).toBe(true);
+
+                      var backupDb = window.sqlitePlugin.openDatabase({ name: backupName, iosDatabaseLocation: 'Documents' }, function() {
+                        backupDb.executeSql('SELECT value FROM backup_test', [], function(queryResult) {
+                          expect(queryResult.rows.item(0).value).toBe('from-source');
+                          cleanup(sourceDb, backupDb);
+                        }, done.fail);
+                      }, done.fail);
+                    }, done.fail);
+                  }, done.fail);
+                }, done.fail);
+              }, done.fail);
+            });
+          });
+        }, MYTIMEOUT);
+
         it(suiteName + 'sqlitePlugin.restoreDatabase with no sourceName setting (REJECTED with exception)', function(done) {
           if (cordova.platformId !== 'ios') pending('restoreDatabase is a no-op on non-iOS platforms');
 

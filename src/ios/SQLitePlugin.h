@@ -39,6 +39,7 @@ typedef int WebSQLError;
 -(void) delete: (CDVInvokedUrlCommand*)command;
 -(void) copyDatabase: (CDVInvokedUrlCommand*)command;
 -(void) prepareDatabase: (CDVInvokedUrlCommand*)command;
+-(void) backupDatabase: (CDVInvokedUrlCommand*)command;
 -(void) restoreDatabase: (CDVInvokedUrlCommand*)command;
 
 -(void) openNow: (CDVInvokedUrlCommand*)command;
@@ -46,6 +47,7 @@ typedef int WebSQLError;
 -(void) deleteNow: (CDVInvokedUrlCommand*)command;
 -(void) copyDatabaseNow: (CDVInvokedUrlCommand*)command;
 -(void) prepareDatabaseNow: (CDVInvokedUrlCommand*)command;
+-(void) backupDatabaseNow: (CDVInvokedUrlCommand*)command;
 -(void) restoreDatabaseNow: (CDVInvokedUrlCommand*)command;
 
 // Batch processing interface

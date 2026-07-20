@@ -787,6 +787,59 @@
         return cordova.exec(resolve, reject, "SQLitePlugin", "prepareDatabase", [args]);
       });
     },
+    backupDatabase: function(first, success, error) {
+      var args, result;
+      if (cordova.platformId !== 'ios') {
+        result = {
+          action: 'skipped',
+          platform: cordova.platformId
+        };
+        if (typeof success === 'function') {
+          return nextTick(function() {
+            return success(result);
+          });
+        }
+        return Promise.resolve(result);
+      }
+      if (!first || first.constructor !== Object) {
+        throw newSQLError('Sorry first backupDatabase argument must be an object');
+      }
+      if (!first.name || typeof first.name !== 'string') {
+        throw newSQLError('Valid source database name string is required in backupDatabase call');
+      }
+      if (!first.sourceLocation) {
+        throw newSQLError('sourceLocation is required in backupDatabase call');
+      }
+      if (!first.backupName || typeof first.backupName !== 'string') {
+        throw newSQLError('Valid backupName string is required in backupDatabase call');
+      }
+      if (!first.backupLocation) {
+        throw newSQLError('backupLocation is required in backupDatabase call');
+      }
+      args = {
+        sourceName: first.name,
+        sourceDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.sourceLocation
+        }, 'backupDatabase'),
+        sourceAppGroup: first.sourceAppGroup || first.iosDatabaseLocationAppGroup,
+        backupName: first.backupName,
+        backupDblocation: resolveIOSDatabaseLocation({
+          iosDatabaseLocation: first.backupLocation
+        }, 'backupDatabase'),
+        backupAppGroup: first.backupAppGroup
+      };
+      validateAppGroupLocation(args.sourceDblocation, args.sourceAppGroup, 'backupDatabase', 'sourceAppGroup');
+      validateAppGroupLocation(args.backupDblocation, args.backupAppGroup, 'backupDatabase', 'backupAppGroup');
+      if (databaseLocationsMatch(args.sourceName, args.sourceDblocation, args.sourceAppGroup, args.backupName, args.backupDblocation, args.backupAppGroup)) {
+        throw newSQLError('Source and backup database paths must be different in backupDatabase call');
+      }
+      if (typeof success === 'function' || typeof error === 'function') {
+        return cordova.exec(success, error, "SQLitePlugin", "backupDatabase", [args]);
+      }
+      return new Promise(function(resolve, reject) {
+        return cordova.exec(resolve, reject, "SQLitePlugin", "backupDatabase", [args]);
+      });
+    },
     restoreDatabase: function(first, success, error) {
       var args, result;
       if (cordova.platformId !== 'ios') {
@@ -1118,6 +1171,7 @@
     deleteDatabase: SQLiteFactory.deleteDatabase,
     copyDatabase: SQLiteFactory.copyDatabase,
     prepareDatabase: SQLiteFactory.prepareDatabase,
+    backupDatabase: SQLiteFactory.backupDatabase,
     restoreDatabase: SQLiteFactory.restoreDatabase
   };
 
