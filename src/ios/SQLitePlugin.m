@@ -631,13 +631,6 @@ cleanup:
 
     if (primaryExisted) {
         action = @"ready";
-    } else if (migrateLegacyIfNeeded && legacyExists) {
-        if (![self createDatabaseSnapshotFromPath:legacyPath toPath:primaryPath errorMessage:&errorMessage]) {
-            CDVPluginResult *migrationError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
-            [self.commandDelegate sendPluginResult:migrationError callbackId:command.callbackId];
-            return;
-        }
-        action = @"migrated";
     } else if (restoreIfMissing && backupExists) {
         if (![self createDatabaseSnapshotFromPath:backupPath toPath:primaryPath errorMessage:&errorMessage]) {
             CDVPluginResult *restoreError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
@@ -645,6 +638,13 @@ cleanup:
             return;
         }
         action = @"restored";
+    } else if (migrateLegacyIfNeeded && legacyExists) {
+        if (![self createDatabaseSnapshotFromPath:legacyPath toPath:primaryPath errorMessage:&errorMessage]) {
+            CDVPluginResult *migrationError = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+            [self.commandDelegate sendPluginResult:migrationError callbackId:command.callbackId];
+            return;
+        }
+        action = @"migrated";
     }
 
     BOOL primaryNowExists = [fileManager fileExistsAtPath:primaryPath];

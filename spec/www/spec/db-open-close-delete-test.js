@@ -1417,6 +1417,95 @@ var mytests = function() {
           }
         }, MYTIMEOUT);
 
+        it(suiteName + 'sqlitePlugin.prepareDatabase creates no file when primary, backup, and legacy are missing', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          var primaryName = 'prepare-empty-primary.db';
+          var legacyName = 'prepare-empty-legacy.db';
+          var backupName = 'prepare-empty-backup.db';
+          var remove = function(name, location, next) {
+            window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: location }, next, next);
+          };
+
+          remove(primaryName, 'Documents', function() {
+            remove(legacyName, 'Library', function() {
+              remove(backupName, 'Documents', function() {
+                window.sqlitePlugin.prepareDatabase({
+                  name: primaryName,
+                  primaryLocation: 'Documents',
+                  legacyLocation: 'Library',
+                  legacyName: legacyName,
+                  backupLocation: 'Documents',
+                  backupName: backupName
+                }, function(result) {
+                  expect(result.action).toBe('new');
+                  expect(result.primaryExists).toBe(false);
+                  done();
+                }, function() {
+                  done.fail();
+                });
+              });
+            });
+          });
+        }, MYTIMEOUT);
+
+        it(suiteName + 'sqlitePlugin.prepareDatabase restores backup before legacy when both exist', function(done) {
+          if (cordova.platformId !== 'ios') pending('prepareDatabase is a no-op on non-iOS platforms');
+
+          var primaryName = 'prepare-priority-primary.db';
+          var legacyName = 'prepare-priority-legacy.db';
+          var backupName = 'prepare-priority-backup.db';
+          var remove = function(name, location, next) {
+            window.sqlitePlugin.deleteDatabase({ name: name, iosDatabaseLocation: location }, next, next);
+          };
+          var cleanup = function() {
+            remove(primaryName, 'Documents', function() {
+              remove(legacyName, 'Library', function() {
+                remove(backupName, 'Documents', function() {
+                  done();
+                });
+              });
+            });
+          };
+
+          remove(primaryName, 'Documents', function() {
+            remove(legacyName, 'Library', function() {
+              remove(backupName, 'Documents', function() {
+                var legacyDb = window.sqlitePlugin.openDatabase({ name: legacyName, iosDatabaseLocation: 'Library' }, function() {
+                  legacyDb.close(function() {
+                    var backupDb = window.sqlitePlugin.openDatabase({ name: backupName, iosDatabaseLocation: 'Documents' }, function() {
+                      backupDb.close(function() {
+                        window.sqlitePlugin.prepareDatabase({
+                          name: primaryName,
+                          primaryLocation: 'Documents',
+                          legacyLocation: 'Library',
+                          legacyName: legacyName,
+                          backupLocation: 'Documents',
+                          backupName: backupName
+                        }, function(result) {
+                          expect(result.action).toBe('restored');
+                          expect(result.primaryExists).toBe(true);
+                          cleanup();
+                        }, function() {
+                          done.fail();
+                        });
+                      }, function() {
+                        done.fail();
+                      });
+                    }, function() {
+                      done.fail();
+                    });
+                  }, function() {
+                    done.fail();
+                  });
+                }, function() {
+                  done.fail();
+                });
+              });
+            });
+          });
+        }, MYTIMEOUT);
+
       }
 
     }
